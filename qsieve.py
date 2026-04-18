@@ -107,10 +107,6 @@ def qsieve(N):
     # we approximate log(Q(x)) in float
     scores = [math.log(Qf(x_block + j)) for j in range(BLOCK_SIZE)]
 
-    # compare with exact integer
-    #scores_exact = [math.log(Q(x_block + j)) for j in range(BLOCK_SIZE)]
-    #print(max([abs(x-y) for x,y in zip(scores, scores_exact)]))
-
     # sieve with the dividing roots
     for root,p,log_p in ROOTS_LIST:
       j = (root - x_block) % p
