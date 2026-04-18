@@ -61,19 +61,26 @@ def process_congruence(N, nums, factors):
   return False
 
 def qsieve(N):
+  a = math.isqrt(N)
+  # this is the magic polynomial of Quadratic Sieve
+  def Q(x): return (a+x)*(a+x) - N
+
+  # compute the ROOTS for each prime in FACTOR_BASE
+  # Q(x) == 0 mod p
+  ROOTS = {p:list(set([x for x in range(p) if Q(x) % p == 0])) for p in FACTOR_BASE}
+  print(ROOTS)
+
   # first we need to find B-smooth Q(x) values
   # TODO: real qsieve doesn't check all of these, it finds likely candidates
-  a = math.isqrt(N)
+  BLOCK_SIZE = 4096
   relations = []
-  for x in range(1, math.isqrt(2*N)-a): # after this it gets dumb
-    # this is the Q(x) function
-    qx = (a+x)*(a+x) - N
-    assert qx > 0
-    relation = b_smooth_factorize(qx)
-    if relation:
-      # start^2 === relation
-      print(a+x, relation)
-      relations.append((a+x, relation))
+  for x_block in range(1, math.isqrt(2*N)-a, BLOCK_SIZE): # after this it gets dumb
+    print(f"process block {x_block}")
+    for x in range(x_block, x_block+BLOCK_SIZE):
+      relation = b_smooth_factorize(Q(x))
+      if relation:
+        print(a+x, relation)
+        relations.append((a+x, relation))
     if len(relations) >= NUM_RELATIONS: break
 
   # then we need to solve to make a perfect square from the relations
