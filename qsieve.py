@@ -15,7 +15,7 @@ def gen_prime(bits):
   return ret
 
 # generate
-SEMIPRIME_BITS = 40
+SEMIPRIME_BITS = 30
 # generate number for factoring (N)
 while 1:
   p,q = gen_prime(SEMIPRIME_BITS), gen_prime(SEMIPRIME_BITS)
@@ -54,6 +54,15 @@ def process_congruence(N, nums, factors):
     return True
   return False
 
+def b_smooth_factorize(num):
+  factors = [0]*len(FACTOR_BASE)
+  for i,p in enumerate(FACTOR_BASE):
+    while num%p == 0:
+      factors[i] += 1
+      num //= p
+      if num == 1: return factors
+  return None
+
 def qsieve(N):
   a = math.isqrt(N)
   # this is the magic polynomial of Quadratic Sieve
@@ -71,9 +80,8 @@ def qsieve(N):
   # after the max here it gets dumb
   for x_block in range(1, math.isqrt(2*N)-a, BLOCK_SIZE):
     q_vals = [Q(x) for x in range(x_block, x_block+BLOCK_SIZE)]
-    factors = [[0]* len(FACTOR_BASE) for _ in range(BLOCK_SIZE)]
 
-    for pi,p in enumerate(FACTOR_BASE):
+    for p in FACTOR_BASE:
       # go through the roots, because they are only one that can divide
       for r in ROOTS[p]:
         j = (r - x_block) % p
@@ -81,7 +89,6 @@ def qsieve(N):
           # divide all the p's out of that q_val
           while q_vals[j] % p == 0:
             q_vals[j] //= p
-            factors[j][pi] += 1
           j += p
 
     for j in range(BLOCK_SIZE):
@@ -89,7 +96,7 @@ def qsieve(N):
       if q_vals[j] == 1:
         x = x_block+j
         progress.set_description(f"{a+x}")
-        relations.append((a+x, factors[j]))
+        relations.append((a+x, b_smooth_factorize(Q(x))))
 
     # are we done after this block?
     progress.update(min(NUM_RELATIONS, len(relations))-progress.n)
