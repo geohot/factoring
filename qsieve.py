@@ -70,7 +70,9 @@ def b_smooth_factorize(num):
 def qsieve(N):
   a = math.isqrt(N)
   # this is the magic polynomial of Quadratic Sieve
-  def Q(x): return (a+x)*(a+x) - N
+  def Q(x):
+    # TODO: MPQS and SIQS use multiple polynomials here, not just one
+    return (a+x)*(a+x) - N
 
   # compute the ROOTS for each prime in FACTOR_BASE
   # Q(x) == 0 mod p
@@ -82,10 +84,11 @@ def qsieve(N):
   st = time.perf_counter()
   relations = []
   progress = tqdm.tqdm(total=NUM_RELATIONS)
-  log_sieve_false_positive= 0
+  log_sieve_false_positive = 0
 
   # after the max here it gets dumb
   for x_block in range(1, math.isqrt(2*N)-a, BLOCK_SIZE):
+    # TODO: we can explore both negative and positive x
     q_vals = [Q(x) for x in range(x_block, x_block+BLOCK_SIZE)]
     scores = [math.log(q) for q in q_vals]
 
