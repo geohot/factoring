@@ -77,8 +77,14 @@ def qsieve(N):
   # compute the ROOTS for each prime in FACTOR_BASE
   # Q(x) == 0 mod p
   ROOTS = {p:list(set([x for x in range(p) if Q(x) % p == 0])) for p in FACTOR_BASE}
-  # precompute the logs of the primes
-  FACTOR_BASE_WITH_LOG = [(p,math.log(p)) for p in FACTOR_BASE]
+
+  # precompute the logs of the primes and put roots in a list
+  ROOTS_LIST = []
+  for p in FACTOR_BASE:
+    lp = math.log(p)
+    for r in ROOTS[p]:
+      ROOTS_LIST.append((r,p,lp))
+  print(f"{len(ROOTS_LIST)=}")
 
   # first we need to find B-smooth Q(x) values
   st = time.perf_counter()
@@ -90,22 +96,20 @@ def qsieve(N):
   for x_block in range(1, math.isqrt(2*N)-a, BLOCK_SIZE):
     # TODO: we can explore both negative and positive x
     q_vals = [Q(x) for x in range(x_block, x_block+BLOCK_SIZE)]
-    scores = [math.log(q) for q in q_vals]
 
-    for p,lp in FACTOR_BASE_WITH_LOG:
-      # go through the roots, because they are only one that can divide
-      for r in ROOTS[p]:
-        j = (r - x_block) % p
-        while j < BLOCK_SIZE:
-          scores[j] -= lp
-          j += p
+    # sieve with the dividing roots
+    scores = [math.log(q) for q in q_vals]
+    for r,p,lp in ROOTS_LIST:
+      j = (r - x_block) % p
+      while j < BLOCK_SIZE:
+        scores[j] -= lp
+        j += p
 
     # check for success
     for j in range(BLOCK_SIZE):
       # if we fully divided it, it's a good relation
       if scores[j] < LOG_SIEVE_THRESHOLD:
-        relation = b_smooth_factorize(q_vals[j])
-        if relation:
+        if relation:=b_smooth_factorize(q_vals[j]):
           x = x_block+j
           progress.set_description(f"{a+x}")
           relations.append((a+x, relation))
