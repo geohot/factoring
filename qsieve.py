@@ -63,20 +63,18 @@ def process_congruence(N, nums, factors):
 def qsieve(N):
   # first we need to find B-smooth Q(x) values
   # TODO: real qsieve doesn't check all of these, it finds likely candidates
-  start = math.isqrt(N)+1
-  end = math.isqrt(2*N)  # after this it gets dumb
+  a = math.isqrt(N)
   relations = []
-  while len(relations) < NUM_RELATIONS and start < end:
-    # TODO: chatgpt says it should be - and not % here, but that's slower
-    # added end bound for the search to fix
-    qx = start*start - N
+  for x in range(1, math.isqrt(2*N)-a): # after this it gets dumb
+    # this is the Q(x) function
+    qx = (a+x)*(a+x) - N
     assert qx > 0
     relation = b_smooth_factorize(qx)
     if relation:
       # start^2 === relation
-      print(start, relation)
-      relations.append((start, relation))
-    start += 1
+      print(a+x, relation)
+      relations.append((a+x, relation))
+    if len(relations) >= NUM_RELATIONS: break
 
   # then we need to solve to make a perfect square from the relations
   print(f"collected {len(relations)=}")
