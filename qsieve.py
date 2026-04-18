@@ -16,7 +16,7 @@ def gen_prime(bits):
 SEMIPRIME_BITS = 18
 
 # params for the solver
-B = 50
+B = 200
 
 # generate primes up to B
 PRIMES = [n for n in range(B+1) if is_prime(n)]
@@ -42,41 +42,51 @@ def process_congruence(semiprime_factor_me, nums, factors):
   for factor in [neg_factor, pos_factor]:
     if factor == 1 or factor == semiprime_factor_me: continue
     other_factor = semiprime_factor_me//factor
-    print("FOUND", nums, factors, "factors into", factor, other_factor)
+    print("FOUND", nums, [(p,f) for p,f in zip(PRIMES, factors) if f > 0],
+          "factors into", factor, other_factor)
     assert semiprime_factor_me == factor*other_factor
     return True
   return False
+
+def parity_mask(relation):
+  return sum(1 << i for i,n in enumerate(relation) if n&1)
 
 def qsieve(semiprime_factor_me):
   # first we need to find B-smooth numbers that are perfect squares
   # TODO: real qsieve doesn't check all of these, it finds likely candidates
   start = math.isqrt(semiprime_factor_me)+1
+  end = math.isqrt(2*semiprime_factor_me)  # after this it gets dumb
   relations = []
-  while len(relations) < NUM_RELATIONS:
+  while len(relations) < NUM_RELATIONS and start < end:
     # TODO: chatgpt says it should be - and not % here, but that's slower
-    qx = start*start % semiprime_factor_me
+    # added end bound for the search to fix
+    qx = start*start - semiprime_factor_me
     assert qx > 0
     relation = b_smooth_factorize(qx)
     if relation:
       # start^2 === relation
       print(start, relation)
-      relations.append((start, relation))
+      relations.append((start, relation, parity_mask(relation)))
     start += 1
 
   # then we need to solve to make a perfect square from the relations
   print(f"collected {len(relations)=}")
   # TODO: real algorithm here
   for i in range(1, 1<<len(relations)):
-    factors = [0]*len(PRIMES)
-    for j,(_,relation) in enumerate(relations):
+    search_mask = 0
+    for j,(_,relation,mask) in enumerate(relations):
       if i&(1<<j):
-        for k,n in enumerate(relation):
-          factors[k] += n
-    if all(x%2 == 0 for x in factors):
+        search_mask ^= mask
+
+    # if we get a hit, reconstruct nums and factors
+    if search_mask == 0:
       nums = []
-      for j,(num,_) in enumerate(relations):
+      factors = [0]*len(PRIMES)
+      for j,(num,relation,_) in enumerate(relations):
         if i&(1<<j):
           nums.append(num)
+          for k,n in enumerate(relation):
+            factors[k] += n
       if process_congruence(semiprime_factor_me, nums, factors): break
   else:
     raise RuntimeError("failed to find congruence")
