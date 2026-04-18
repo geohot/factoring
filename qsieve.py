@@ -1,6 +1,7 @@
 # quadratic sieve to start
 import math
 import random
+import tqdm
 
 # SLOW
 #def is_prime(n): return n > 1 and all(n%d for d in range(2, math.isqrt(n)+1))
@@ -13,7 +14,7 @@ def gen_prime(bits):
   return ret
 
 # generate
-SEMIPRIME_BITS = 25
+SEMIPRIME_BITS = 30
 # generate number for factoring (N)
 while 1:
   p,q = gen_prime(SEMIPRIME_BITS), gen_prime(SEMIPRIME_BITS)
@@ -25,12 +26,12 @@ while 1:
 del p,q
 
 # params for the solver
-B = 500
+B = 2000
 
 # generate primes up to B filtered by quadratic residue
 # https://en.wikipedia.org/wiki/Euler%27s_criterion
 FACTOR_BASE = [2] + [p for p in range(3, B+1, 2) if is_prime(p) and pow(N, (p-1)//2, p) == 1]
-NUM_RELATIONS = int(len(FACTOR_BASE)*1.2)+2
+NUM_RELATIONS = len(FACTOR_BASE) + max(8, len(FACTOR_BASE) // 10)
 print(f"{len(FACTOR_BASE)=} {NUM_RELATIONS=}")
 
 def format_factors(factors):
@@ -46,9 +47,7 @@ def process_congruence(N, nums, factors):
   for factor in [neg_factor, pos_factor]:
     if factor == 1 or factor == N: continue
     other_factor = N//factor
-    print("FOUND")
-    print(nums)
-    print(format_factors(factors))
+    print(f"FOUND {len(nums)} used relations with {sum(x>0 for x in factors)} factors")
     print("factors into", factor, other_factor)
     assert N == factor*other_factor
     return True
@@ -62,11 +61,11 @@ def qsieve(N):
   # compute the ROOTS for each prime in FACTOR_BASE
   # Q(x) == 0 mod p
   ROOTS = {p:list(set([x for x in range(p) if Q(x) % p == 0])) for p in FACTOR_BASE}
-  print(ROOTS)
 
   # first we need to find B-smooth Q(x) values
   BLOCK_SIZE = 4096
   relations = []
+  progress = tqdm.tqdm(total=NUM_RELATIONS)
   # after the max here it gets dumb
   for x_block in range(1, math.isqrt(2*N)-a, BLOCK_SIZE):
     q_vals = [Q(x) for x in range(x_block, x_block+BLOCK_SIZE)]
@@ -87,11 +86,13 @@ def qsieve(N):
       # if we fully divided it, it's a good relation
       if q_vals[j] == 1:
         x = x_block+j
-        print(a+x, format_factors(factors[j]))
+        progress.set_description(f"{a+x}")
         relations.append((a+x, factors[j]))
 
     # are we done after this block?
+    progress.update(min(NUM_RELATIONS, len(relations))-progress.n)
     if len(relations) >= NUM_RELATIONS: break
+  progress.close()
 
   # then we need to solve to make a perfect square from the relations
   print(f"collected {len(relations)=}")
