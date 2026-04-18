@@ -53,13 +53,6 @@ def process_congruence(semiprime_factor_me, nums, factors):
 def parity_mask(relation):
   return sum(1 << i for i,n in enumerate(relation) if n&1)
 
-def bit_length(x):
-  ret = 0
-  while x != 0:
-    ret += 1
-    x //= 2
-  return ret
-
 def qsieve(semiprime_factor_me):
   # first we need to find B-smooth numbers that are perfect squares
   # TODO: real qsieve doesn't check all of these, it finds likely candidates
@@ -87,7 +80,8 @@ def qsieve(semiprime_factor_me):
     combo = 1 << i
     while mask:
       # what's the largest number in mask
-      pivot = bit_length(mask) - 1
+      # did you know bit_length was python built-in on int?
+      pivot = mask.bit_length() - 1
 
       # if we don't have this number, we add it
       if pivot not in basis:
