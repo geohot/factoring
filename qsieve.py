@@ -50,9 +50,6 @@ def process_congruence(semiprime_factor_me, nums, factors):
     return True
   return False
 
-def parity_mask(relation):
-  return sum(1 << i for i,n in enumerate(relation) if n&1)
-
 def qsieve(semiprime_factor_me):
   # first we need to find B-smooth numbers that are perfect squares
   # TODO: real qsieve doesn't check all of these, it finds likely candidates
@@ -68,7 +65,7 @@ def qsieve(semiprime_factor_me):
     if relation:
       # start^2 === relation
       print(start, relation)
-      relations.append((start, relation, parity_mask(relation)))
+      relations.append((start, relation))
     start += 1
 
   # then we need to solve to make a perfect square from the relations
@@ -76,7 +73,8 @@ def qsieve(semiprime_factor_me):
 
   # we need to find a basis among the parity masks
   basis = {}
-  for i,(_,_,mask) in enumerate(relations):
+  for i,(_,relation) in enumerate(relations):
+    mask = sum(1 << i for i,n in enumerate(relation) if n&1)
     combo = 1 << i
     while mask:
       # what's the largest number in mask
@@ -96,7 +94,7 @@ def qsieve(semiprime_factor_me):
     if mask == 0:
       nums = []
       factors = [0]*len(PRIMES)
-      for j,(num,relation,_) in enumerate(relations):
+      for j,(num,relation) in enumerate(relations):
         if combo&(1<<j):
           nums.append(num)
           for k,n in enumerate(relation):
