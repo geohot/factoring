@@ -2,6 +2,7 @@
 import math
 import random
 import tqdm
+import time
 
 # SLOW
 #def is_prime(n): return n > 1 and all(n%d for d in range(2, math.isqrt(n)+1))
@@ -14,7 +15,7 @@ def gen_prime(bits):
   return ret
 
 # generate
-SEMIPRIME_BITS = 30
+SEMIPRIME_BITS = 40
 # generate number for factoring (N)
 while 1:
   p,q = gen_prime(SEMIPRIME_BITS), gen_prime(SEMIPRIME_BITS)
@@ -47,7 +48,7 @@ def process_congruence(N, nums, factors):
   for factor in [neg_factor, pos_factor]:
     if factor == 1 or factor == N: continue
     other_factor = N//factor
-    print(f"FOUND {len(nums)} used relations with {sum(x>0 for x in factors)} factors")
+    print(f"found square, {len(nums)} used relations with {sum(x>0 for x in factors)} factors")
     print("factors into", factor, other_factor)
     assert N == factor*other_factor
     return True
@@ -63,6 +64,7 @@ def qsieve(N):
   ROOTS = {p:list(set([x for x in range(p) if Q(x) % p == 0])) for p in FACTOR_BASE}
 
   # first we need to find B-smooth Q(x) values
+  st = time.perf_counter()
   BLOCK_SIZE = 4096
   relations = []
   progress = tqdm.tqdm(total=NUM_RELATIONS)
@@ -95,7 +97,7 @@ def qsieve(N):
   progress.close()
 
   # then we need to solve to make a perfect square from the relations
-  print(f"collected {len(relations)=}")
+  print(f"collected {len(relations)=} in {time.perf_counter()-st:.2f} s")
 
   # we need to find a basis among the parity masks
   basis = {}
