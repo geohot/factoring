@@ -42,14 +42,23 @@ def process_congruence(semiprime_factor_me, nums, factors):
   for factor in [neg_factor, pos_factor]:
     if factor == 1 or factor == semiprime_factor_me: continue
     other_factor = semiprime_factor_me//factor
-    print("FOUND", nums, [(p,f) for p,f in zip(PRIMES, factors) if f > 0],
-          "factors into", factor, other_factor)
+    print("FOUND")
+    print(nums)
+    print([(p,f) for p,f in zip(PRIMES, factors) if f > 0])
+    print("factors into", factor, other_factor)
     assert semiprime_factor_me == factor*other_factor
     return True
   return False
 
 def parity_mask(relation):
   return sum(1 << i for i,n in enumerate(relation) if n&1)
+
+def bit_length(x):
+  ret = 0
+  while x != 0:
+    ret += 1
+    x //= 2
+  return ret
 
 def qsieve(semiprime_factor_me):
   # first we need to find B-smooth numbers that are perfect squares
@@ -71,19 +80,30 @@ def qsieve(semiprime_factor_me):
 
   # then we need to solve to make a perfect square from the relations
   print(f"collected {len(relations)=}")
-  # TODO: real algorithm here
-  for i in range(1, 1<<len(relations)):
-    search_mask = 0
-    for j,(_,relation,mask) in enumerate(relations):
-      if i&(1<<j):
-        search_mask ^= mask
 
-    # if we get a hit, reconstruct nums and factors
-    if search_mask == 0:
+  # we need to find a basis among the parity masks
+  basis = {}
+  for i,(_,_,mask) in enumerate(relations):
+    combo = 1 << i
+    while mask:
+      # what's the largest number in mask
+      pivot = bit_length(mask) - 1
+
+      # if we don't have this number, we add it
+      if pivot not in basis:
+        basis[pivot] = (mask, combo)
+        break
+
+      # if we do have this number, we remove it
+      mask ^= basis[pivot][0]
+      combo ^= basis[pivot][1]
+
+    # if we get a hit, reconstruct nums and factors from combo
+    if mask == 0:
       nums = []
       factors = [0]*len(PRIMES)
       for j,(num,relation,_) in enumerate(relations):
-        if i&(1<<j):
+        if combo&(1<<j):
           nums.append(num)
           for k,n in enumerate(relation):
             factors[k] += n
