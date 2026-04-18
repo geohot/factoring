@@ -29,11 +29,15 @@ del p,q
 # params for the solver
 B = 2000
 
+# params for log sieve
+BLOCK_SIZE = 4096
+LOG_SIEVE_THRESHOLD = math.log(B)
+
 # generate primes up to B filtered by quadratic residue
 # https://en.wikipedia.org/wiki/Euler%27s_criterion
 FACTOR_BASE = [2] + [p for p in range(3, B+1, 2) if is_prime(p) and pow(N, (p-1)//2, p) == 1]
 NUM_RELATIONS = len(FACTOR_BASE) + max(8, len(FACTOR_BASE) // 10)
-print(f"{len(FACTOR_BASE)=} {NUM_RELATIONS=}")
+print(f"{B=} {len(FACTOR_BASE)=} {NUM_RELATIONS=} {LOG_SIEVE_THRESHOLD=:.2f}")
 
 def format_factors(factors):
   return ' * '.join([f"{p}^{f}" if f > 1 else f"{p}" for p,f in zip(FACTOR_BASE, factors) if f > 0])
@@ -71,32 +75,41 @@ def qsieve(N):
   # compute the ROOTS for each prime in FACTOR_BASE
   # Q(x) == 0 mod p
   ROOTS = {p:list(set([x for x in range(p) if Q(x) % p == 0])) for p in FACTOR_BASE}
+  # precompute the logs of the primes
+  FACTOR_BASE_WITH_LOG = [(p,math.log(p)) for p in FACTOR_BASE]
 
   # first we need to find B-smooth Q(x) values
   st = time.perf_counter()
-  BLOCK_SIZE = 4096
   relations = []
   progress = tqdm.tqdm(total=NUM_RELATIONS)
+  log_sieve_false_positive= 0
+
   # after the max here it gets dumb
   for x_block in range(1, math.isqrt(2*N)-a, BLOCK_SIZE):
     q_vals = [Q(x) for x in range(x_block, x_block+BLOCK_SIZE)]
+    scores = [math.log(q) for q in q_vals]
 
-    for p in FACTOR_BASE:
+    for p,lp in FACTOR_BASE_WITH_LOG:
       # go through the roots, because they are only one that can divide
       for r in ROOTS[p]:
         j = (r - x_block) % p
         while j < BLOCK_SIZE:
-          # divide all the p's out of that q_val
-          while q_vals[j] % p == 0:
-            q_vals[j] //= p
+          scores[j] -= lp
           j += p
 
+    # check for success
     for j in range(BLOCK_SIZE):
       # if we fully divided it, it's a good relation
-      if q_vals[j] == 1:
-        x = x_block+j
-        progress.set_description(f"{a+x}")
-        relations.append((a+x, b_smooth_factorize(Q(x))))
+      if scores[j] < LOG_SIEVE_THRESHOLD:
+        relation = b_smooth_factorize(q_vals[j])
+        if relation:
+          x = x_block+j
+          progress.set_description(f"{a+x}")
+          relations.append((a+x, relation))
+        else:
+          # NOTE: this can miss if the threshold is high
+          # the log doesn't include multiple
+          log_sieve_false_positive += 1
 
     # are we done after this block?
     progress.update(min(NUM_RELATIONS, len(relations))-progress.n)
@@ -105,6 +118,7 @@ def qsieve(N):
 
   # then we need to solve to make a perfect square from the relations
   print(f"collected {len(relations)=} in {time.perf_counter()-st:.2f} s")
+  print(f"got {log_sieve_false_positive} false positives from log sieve")
 
   # we need to find a basis among the parity masks
   basis = {}
