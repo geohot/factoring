@@ -96,23 +96,21 @@ def qsieve(N):
 
   # after the max here it gets dumb
   for x_block in range(1, math.isqrt(2*N)-a, BLOCK_SIZE):
-    # TODO: we can explore both negative and positive x
-    q_vals = [Q(x) for x in range(x_block, x_block+BLOCK_SIZE)]
-
     # sieve with the dividing roots
-    scores = [math.log(q) for q in q_vals]
+    scores = [0.0]*BLOCK_SIZE
     for root,p,log_p in ROOTS_LIST:
-      j = (root - x_block) % p
+      j = (root-x_block) % p
       while j < BLOCK_SIZE:
         scores[j] -= log_p
         j += p
 
     # check for success
     for j in range(BLOCK_SIZE):
+      x = x_block+j
+      q_val = Q(x)
       # if we fully divided it, it's a good relation
-      if scores[j] < LOG_SIEVE_THRESHOLD:
-        if relation:=b_smooth_factorize(q_vals[j]):
-          x = x_block+j
+      if (math.log(q_val)+scores[j]) < LOG_SIEVE_THRESHOLD:
+        if relation:=b_smooth_factorize(q_val):
           progress.set_description(f"{a+x}")
           relations.append((a+x, relation))
         else:
