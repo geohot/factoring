@@ -14,7 +14,7 @@ def gen_prime(bits):
 
 # generate
 SEMIPRIME_BITS = 18
-# generate number for factoring
+# generate number for factoring (N)
 while 1:
   p,q = gen_prime(SEMIPRIME_BITS), gen_prime(SEMIPRIME_BITS)
   if p==q: continue
@@ -27,10 +27,11 @@ del p,q
 # params for the solver
 B = 200
 
-# generate primes up to B
-FACTOR_BASE = [n for n in range(B+1) if is_prime(n)]
+# generate primes up to B filtered by quadratic residue
+# https://en.wikipedia.org/wiki/Euler%27s_criterion
+FACTOR_BASE = [2] + [p for p in range(3, B+1, 2) if is_prime(p) and pow(N, (p-1)//2, p) == 1]
 NUM_RELATIONS = int(len(FACTOR_BASE)*1.2)+2
-print(f"num primes {len(FACTOR_BASE)}, num relations {NUM_RELATIONS}")
+print(f"{len(FACTOR_BASE)=} {NUM_RELATIONS=}")
 
 def b_smooth_factorize(num):
   factors = [0]*len(FACTOR_BASE)
