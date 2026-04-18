@@ -13,19 +13,19 @@ def gen_prime(bits):
   return ret
 
 # generate
-SEMIPRIME_BITS = 30
+SEMIPRIME_BITS = 25
 # generate number for factoring (N)
 while 1:
   p,q = gen_prime(SEMIPRIME_BITS), gen_prime(SEMIPRIME_BITS)
   if p==q: continue
   N = p*q
-  print(f"factoring {N} into {p} {q}")
+  print(f"factoring {N} into {p} {q} with {N.bit_length()} bits")
   break
 # no cheating
 del p,q
 
 # params for the solver
-B = 400
+B = 500
 
 # generate primes up to B filtered by quadratic residue
 # https://en.wikipedia.org/wiki/Euler%27s_criterion
@@ -33,14 +33,8 @@ FACTOR_BASE = [2] + [p for p in range(3, B+1, 2) if is_prime(p) and pow(N, (p-1)
 NUM_RELATIONS = int(len(FACTOR_BASE)*1.2)+2
 print(f"{len(FACTOR_BASE)=} {NUM_RELATIONS=}")
 
-def b_smooth_factorize(num):
-  factors = [0]*len(FACTOR_BASE)
-  for i,p in enumerate(FACTOR_BASE):
-    while num%p == 0:
-      factors[i] += 1
-      num //= p
-      if num == 1: return factors
-  return None
+def format_factors(factors):
+  return ' * '.join([f"{p}^{f}" if f > 1 else f"{p}" for p,f in zip(FACTOR_BASE, factors) if f > 0])
 
 def process_congruence(N, nums, factors):
   # then we solve with GCD
@@ -54,7 +48,7 @@ def process_congruence(N, nums, factors):
     other_factor = N//factor
     print("FOUND")
     print(nums)
-    print([(p,f) for p,f in zip(FACTOR_BASE, factors) if f > 0])
+    print(format_factors(factors))
     print("factors into", factor, other_factor)
     assert N == factor*other_factor
     return True
@@ -71,10 +65,10 @@ def qsieve(N):
   print(ROOTS)
 
   # first we need to find B-smooth Q(x) values
-  # TODO: real qsieve doesn't check all of these, it finds likely candidates
   BLOCK_SIZE = 4096
   relations = []
-  for x_block in range(1, math.isqrt(2*N)-a, BLOCK_SIZE): # after this it gets dumb
+  # after the max here it gets dumb
+  for x_block in range(1, math.isqrt(2*N)-a, BLOCK_SIZE):
     q_vals = [Q(x) for x in range(x_block, x_block+BLOCK_SIZE)]
     factors = [[0]* len(FACTOR_BASE) for _ in range(BLOCK_SIZE)]
 
@@ -93,7 +87,7 @@ def qsieve(N):
       # if we fully divided it, it's a good relation
       if q_vals[j] == 1:
         x = x_block+j
-        print(a+x, factors[j])
+        print(a+x, format_factors(factors[j]))
         relations.append((a+x, factors[j]))
 
     # are we done after this block?
