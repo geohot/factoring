@@ -13,7 +13,7 @@ def gen_prime(bits):
   return ret
 
 # generate
-SEMIPRIME_BITS = 18
+SEMIPRIME_BITS = 30
 # generate number for factoring (N)
 while 1:
   p,q = gen_prime(SEMIPRIME_BITS), gen_prime(SEMIPRIME_BITS)
@@ -25,7 +25,7 @@ while 1:
 del p,q
 
 # params for the solver
-B = 200
+B = 400
 
 # generate primes up to B filtered by quadratic residue
 # https://en.wikipedia.org/wiki/Euler%27s_criterion
@@ -75,12 +75,28 @@ def qsieve(N):
   BLOCK_SIZE = 4096
   relations = []
   for x_block in range(1, math.isqrt(2*N)-a, BLOCK_SIZE): # after this it gets dumb
-    print(f"process block {x_block}")
-    for x in range(x_block, x_block+BLOCK_SIZE):
-      relation = b_smooth_factorize(Q(x))
-      if relation:
-        print(a+x, relation)
-        relations.append((a+x, relation))
+    q_vals = [Q(x) for x in range(x_block, x_block+BLOCK_SIZE)]
+    factors = [[0]* len(FACTOR_BASE) for _ in range(BLOCK_SIZE)]
+
+    for pi,p in enumerate(FACTOR_BASE):
+      # go through the roots, because they are only one that can divide
+      for r in ROOTS[p]:
+        j = (r - x_block) % p
+        while j < BLOCK_SIZE:
+          # divide all the p's out of that q_val
+          while q_vals[j] % p == 0:
+            q_vals[j] //= p
+            factors[j][pi] += 1
+          j += p
+
+    for j in range(BLOCK_SIZE):
+      # if we fully divided it, it's a good relation
+      if q_vals[j] == 1:
+        x = x_block+j
+        print(a+x, factors[j])
+        relations.append((a+x, factors[j]))
+
+    # are we done after this block?
     if len(relations) >= NUM_RELATIONS: break
 
   # then we need to solve to make a perfect square from the relations
