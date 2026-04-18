@@ -69,10 +69,17 @@ def b_smooth_factorize(num):
 
 def qsieve(N):
   a = math.isqrt(N)
+  delta = a*a - N
   # this is the magic polynomial of Quadratic Sieve
   def Q(x):
     # TODO: MPQS and SIQS use multiple polynomials here, not just one
-    return (a+x)*(a+x) - N
+    #return (a+x)*(a+x) - N
+    # FOIL to x*x + 2*a*x + a*a - N
+    return x*x + 2*a*x + delta
+
+  # for log(Q(x)) approx
+  a_f, delta_f = float(a), float(delta)
+  def Qf(x): return x*x + 2*a_f*x + delta_f
 
   st = time.perf_counter()
   # compute the ROOTS for each prime in FACTOR_BASE
@@ -95,22 +102,28 @@ def qsieve(N):
   searched = 0
 
   # after the max here it gets dumb
+  # TODO: we can explore both negative and positive x
   for x_block in range(1, math.isqrt(2*N)-a, BLOCK_SIZE):
+    # we approximate log(Q(x)) in float
+    scores = [math.log(Qf(x_block + j)) for j in range(BLOCK_SIZE)]
+
+    # compare with exact integer
+    #scores_exact = [math.log(Q(x_block + j)) for j in range(BLOCK_SIZE)]
+    #print(max([abs(x-y) for x,y in zip(scores, scores_exact)]))
+
     # sieve with the dividing roots
-    scores = [0.0]*BLOCK_SIZE
     for root,p,log_p in ROOTS_LIST:
-      j = (root-x_block) % p
+      j = (root - x_block) % p
       while j < BLOCK_SIZE:
         scores[j] -= log_p
         j += p
 
     # check for success
     for j in range(BLOCK_SIZE):
-      x = x_block+j
-      q_val = Q(x)
       # if we fully divided it, it's a good relation
-      if (math.log(q_val)+scores[j]) < LOG_SIEVE_THRESHOLD:
-        if relation:=b_smooth_factorize(q_val):
+      if scores[j] < LOG_SIEVE_THRESHOLD:
+        x = x_block+j
+        if relation:=b_smooth_factorize(Q(x)):
           progress.set_description(f"{a+x}")
           relations.append((a+x, relation))
         else:
