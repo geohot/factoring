@@ -1,18 +1,26 @@
 # quadratic sieve to start
 import math
 import random
-def is_prime(n): return n > 1 and all(n%d for d in range(2, math.isqrt(n)+1))
+
+# SLOW
+#def is_prime(n): return n > 1 and all(n%d for d in range(2, math.isqrt(n)+1))
+# FAST (can implement Miller-Rabin but meh)
+from sympy import isprime as is_prime
+
 def gen_prime(bits):
   ret = random.randint((1 << (bits-1))+1, 1 << bits)
   while not is_prime(ret): ret += 1
   return ret
 
+# generate
+SEMIPRIME_BITS = 18
+
 # params for the solver
-B = 29
-NUM_RELATIONS = 15
+B = 50
 
 # generate primes up to B
 PRIMES = [n for n in range(B+1) if is_prime(n)]
+NUM_RELATIONS = int(len(PRIMES)*1.2)+2
 print(f"num primes {len(PRIMES)}, num relations {NUM_RELATIONS}")
 
 def b_smooth_factorize(num):
@@ -41,10 +49,14 @@ def process_congruence(semiprime_factor_me, nums, factors):
 
 def qsieve(semiprime_factor_me):
   # first we need to find B-smooth numbers that are perfect squares
+  # TODO: real qsieve doesn't check all of these, it finds likely candidates
   start = int(math.sqrt(semiprime_factor_me)+1)
   relations = []
   while len(relations) < NUM_RELATIONS:
-    relation = b_smooth_factorize((start*start)%semiprime_factor_me)
+    # TODO: chatgpt says it should be - and not % here, but that's slower
+    qx = start*start % semiprime_factor_me
+    assert qx > 0
+    relation = b_smooth_factorize(qx)
     if relation:
       # start^2 === relation
       print(start, relation)
@@ -71,7 +83,7 @@ def qsieve(semiprime_factor_me):
 if __name__ == "__main__":
   # generate number for factoring
   while 1:
-    p,q = gen_prime(18), gen_prime(18)
+    p,q = gen_prime(SEMIPRIME_BITS), gen_prime(SEMIPRIME_BITS)
     if p==q: continue
     semiprime_factor_me = p*q
     print(f"factoring {semiprime_factor_me} into {p} {q}")
