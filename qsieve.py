@@ -15,7 +15,7 @@ def gen_prime(bits):
   return ret
 
 # generate
-SEMIPRIME_BITS = 30
+SEMIPRIME_BITS = 40
 # generate number for factoring (N)
 while 1:
   p,q = gen_prime(SEMIPRIME_BITS), gen_prime(SEMIPRIME_BITS)
@@ -27,7 +27,7 @@ while 1:
 del p,q
 
 # params for the solver
-B = 2000
+B = 5000
 
 # params for log sieve
 BLOCK_SIZE = 4096
@@ -74,6 +74,7 @@ def qsieve(N):
     # TODO: MPQS and SIQS use multiple polynomials here, not just one
     return (a+x)*(a+x) - N
 
+  st = time.perf_counter()
   # compute the ROOTS for each prime in FACTOR_BASE
   # Q(x) == 0 mod p
   ROOTS = {p:list(set([x for x in range(p) if Q(x) % p == 0])) for p in FACTOR_BASE}
@@ -84,7 +85,7 @@ def qsieve(N):
     lp = math.log(p)
     for r in ROOTS[p]:
       ROOTS_LIST.append((r,p,lp))
-  print(f"{len(ROOTS_LIST)=}")
+  print(f"{len(ROOTS_LIST)=} in {time.perf_counter()-st:.2f} s")
 
   # first we need to find B-smooth Q(x) values
   st = time.perf_counter()
