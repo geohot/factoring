@@ -37,7 +37,7 @@ LOG_SIEVE_THRESHOLD = math.log(B)
 # https://en.wikipedia.org/wiki/Euler%27s_criterion
 FACTOR_BASE = [2] + [p for p in range(3, B+1, 2) if is_prime(p) and pow(N, (p-1)//2, p) == 1]
 NUM_RELATIONS = len(FACTOR_BASE) + max(8, len(FACTOR_BASE) // 10)
-print(f"{B=} {len(FACTOR_BASE)=} {NUM_RELATIONS=} {LOG_SIEVE_THRESHOLD=:.2f}")
+print(f"{B=} {max(FACTOR_BASE)=} {len(FACTOR_BASE)=} {NUM_RELATIONS=} {LOG_SIEVE_THRESHOLD=:.2f}")
 
 def format_factors(factors):
   return ' * '.join([f"{p}^{f}" if f > 1 else f"{p}" for p,f in zip(FACTOR_BASE, factors) if f > 0])
@@ -82,9 +82,9 @@ def qsieve(N):
   # precompute the logs of the primes and put roots in a list
   ROOTS_LIST = []
   for p in FACTOR_BASE:
-    lp = math.log(p)
-    for r in ROOTS[p]:
-      ROOTS_LIST.append((r,p,lp))
+    log_p = math.log(p)
+    for root in ROOTS[p]:
+      ROOTS_LIST.append((root,p,log_p))
   print(f"{len(ROOTS_LIST)=} in {time.perf_counter()-st:.2f} s")
 
   # first we need to find B-smooth Q(x) values
@@ -92,6 +92,7 @@ def qsieve(N):
   relations = []
   progress = tqdm.tqdm(total=NUM_RELATIONS)
   log_sieve_false_positive = 0
+  searched = 0
 
   # after the max here it gets dumb
   for x_block in range(1, math.isqrt(2*N)-a, BLOCK_SIZE):
@@ -100,10 +101,10 @@ def qsieve(N):
 
     # sieve with the dividing roots
     scores = [math.log(q) for q in q_vals]
-    for r,p,lp in ROOTS_LIST:
-      j = (r - x_block) % p
+    for root,p,log_p in ROOTS_LIST:
+      j = (root - x_block) % p
       while j < BLOCK_SIZE:
-        scores[j] -= lp
+        scores[j] -= log_p
         j += p
 
     # check for success
@@ -120,12 +121,14 @@ def qsieve(N):
           log_sieve_false_positive += 1
 
     # are we done after this block?
+    searched += BLOCK_SIZE
     progress.update(min(NUM_RELATIONS, len(relations))-progress.n)
     if len(relations) >= NUM_RELATIONS: break
   progress.close()
 
   # then we need to solve to make a perfect square from the relations
   print(f"collected {len(relations)=} in {time.perf_counter()-st:.2f} s")
+  print(f"searched {searched} values of Q")
   print(f"got {log_sieve_false_positive} false positives from log sieve")
 
   # we need to find a basis among the parity masks
