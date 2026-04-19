@@ -113,6 +113,7 @@ def qsieve(N):
       ROOTS_LIST.append((root,p,log_p))
 
   # first we need to find B-smooth Q(x) values
+  # we use a log sieve to prefilter everything
   st = time.perf_counter()
   likely_relations = []
   progress = tqdm.tqdm(total=NUM_RELATIONS)
