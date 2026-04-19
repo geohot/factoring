@@ -17,16 +17,22 @@ from sympy import isprime
 from sympy import sqrt_mod
 
 # param for the generator
-BITS = 100
+BITS = 120
 
 # use this heuristic for B
 B = int(math.exp(0.5 * math.sqrt((BITS * math.log(2)) * math.log(BITS * math.log(2)))))
+
+# hack to deal with inefficencies in this implementation (makes it way faster)
+#B *= 3
+
+# large prime bound
+LP_BOUND = 32*B
 
 # params for log sieve
 BLOCK_SIZE = 4096
 BLOCKS_PER_SUPERBLOCK = 64
 SUPERBLOCK_SIZE = BLOCK_SIZE*BLOCKS_PER_SUPERBLOCK
-LOG_SIEVE_THRESHOLD = 2*math.log(B) + 1
+LOG_SIEVE_THRESHOLD = math.log(LP_BOUND)
 
 def gen_prime(bits):
   ret = random.randint((1 << (bits-1))+1, 1 << bits)
@@ -154,6 +160,7 @@ def qsieve(N):
   searched = 0
   relations = []
   partials = {}
+  partial_match = 0
   log_sieve_false_positive = 0
   sieve_time_s = 0.0
   # NOTE: we explore both negative and positive x
@@ -164,29 +171,31 @@ def qsieve(N):
 
   for x_superblock in superblock_schedule_order:
     # here we extract the real relations from the log_sieve
-    st = time.perf_counter()
+    inner_st = time.perf_counter()
     sieved = do_superblock_sieve(x_superblock, ROOTS_LIST, a_f, delta_f)
-    sieve_time_s = time.perf_counter() - st
+    sieve_time_s += time.perf_counter() - inner_st
     for x in sieved:
       relation, num = b_smooth_factorize(abs(Q(x, a, delta)))
       if num == 1: relations.append((a+x, relation, x<0, 1))
-      elif isprime(num):
+      elif num <= LP_BOUND and isprime(num):
         if num in partials:
           # got a match!
           lhs0, relation0, neg0 = partials[num]
           combined_relation = [u + v for u, v in zip(relation0, relation)]
           relations.append(((a+x)*lhs0, combined_relation, neg0 ^ (x<0), num))
           del partials[num]
+          partial_match += 1
         else:
           partials[num] = (a+x, relation, x<0)
       else: log_sieve_false_positive += 1
     searched += 1
-    progress.set_description(f"{searched:5d} superblocks, {len(relations)/searched:.2f} relations/superblock")
+    progress.set_description(f"{searched:5d} blocks, {len(relations)/searched:.2f} relations/block, {partial_match=}")
     progress.update(min(NUM_RELATIONS, len(relations))-progress.n)
     if len(relations) >= NUM_RELATIONS: break
   progress.close()
-  print(f"collected {len(relations)=} across {searched} blocks in {time.perf_counter()-st:.2f} s")
-  print(f"got {log_sieve_false_positive=} with {sieve_time_s:.2f} s in the sieve")
+  et = time.perf_counter()-st
+  print(f"collected {len(relations)=} across {searched} blocks in {et:.2f} s, {et*1000./searched:.2f} ms/superblock")
+  print(f"got {log_sieve_false_positive=} with {sieve_time_s:.2f} s in the sieve, {len(partials)=} unmatched partial")
 
   # then we need to solve to make a perfect square from the relations
   # we need to find a basis among the parity masks
