@@ -103,19 +103,29 @@ def Q(x, a, delta):
   # FOIL to x*x + 2*a*x + a*a - N
   return x*x + 2*a*x + delta
 
-def do_superblock_sieve(x_superblock, ROOTS_LIST, a_f, delta_f):
+def do_superblock_sieve(x_superblock, SMALL_ROOTS_LIST, LARGE_ROOTS_LIST, a_f, delta_f):
+  # compute buckets
+  buckets = [[] for _ in range(BLOCKS_PER_SUPERBLOCK)]
+  for root,p,log_p in LARGE_ROOTS_LIST:
+    j = (root - x_superblock) % p
+    while j < SUPERBLOCK_SIZE:
+      buckets[j//BLOCK_SIZE].append((j%BLOCK_SIZE, log_p))
+      j += p
+
   ret = []
-  for x_block in range(x_superblock, x_superblock+SUPERBLOCK_SIZE, BLOCK_SIZE):
+  for block_num, x_block in enumerate(range(x_superblock, x_superblock+SUPERBLOCK_SIZE, BLOCK_SIZE)):
     # we approximate log(Q(x)) in float
     scores = [math.log(abs(Q(x_block + j, a_f, delta_f))) for j in range(BLOCK_SIZE)]
 
-    # sieve with the dividing roots
-    # NOTE: we tried bucket sieve, it wasn't much faster and it was more complex
-    for root,p,log_p in ROOTS_LIST:
+    # sieve with the small roots
+    for root,p,log_p in SMALL_ROOTS_LIST:
       j = (root - x_block) % p
       while j < BLOCK_SIZE:
         scores[j] -= log_p
         j += p
+
+    # sieve with the bucket
+    for j,log_p in buckets[block_num]: scores[j] -= log_p
 
     # check for success
     for j in range(BLOCK_SIZE):
@@ -147,11 +157,12 @@ def qsieve(N):
   print(f"computed {len(ROOTS)=} in {time.perf_counter()-st:.2f} s")
 
   # precompute the logs of the primes and put roots in a list
-  ROOTS_LIST = []
+  SMALL_ROOTS_LIST = []
+  LARGE_ROOTS_LIST = []
   for p in FACTOR_BASE:
     log_p = math.log(p)
     for root in ROOTS[p]:
-      ROOTS_LIST.append((root,p,log_p))
+      (SMALL_ROOTS_LIST if p < BLOCK_SIZE else LARGE_ROOTS_LIST).append((root,p,log_p))
 
   # first we need to find B-smooth Q(x) values
   # we use a log sieve to prefilter everything
@@ -172,7 +183,7 @@ def qsieve(N):
   for x_superblock in superblock_schedule_order:
     # here we extract the real relations from the log_sieve
     inner_st = time.perf_counter()
-    sieved = do_superblock_sieve(x_superblock, ROOTS_LIST, a_f, delta_f)
+    sieved = do_superblock_sieve(x_superblock, SMALL_ROOTS_LIST, LARGE_ROOTS_LIST, a_f, delta_f)
     sieve_time_s += time.perf_counter() - inner_st
     for x in sieved:
       relation, num = b_smooth_factorize(abs(Q(x, a, delta)))
@@ -189,7 +200,7 @@ def qsieve(N):
           partials[num] = (a+x, relation, x<0)
       else: log_sieve_false_positive += 1
     searched += 1
-    progress.set_description(f"{searched:5d} blocks, {len(relations)/searched:.2f} relations/block, {partial_match=}")
+    progress.set_description(f"{searched:5d} blocks, {len(relations)/searched:6.2f} relations/block, {partial_match=}")
     progress.update(min(NUM_RELATIONS, len(relations))-progress.n)
     if len(relations) >= NUM_RELATIONS: break
   progress.close()
