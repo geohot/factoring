@@ -64,10 +64,18 @@ def b_smooth_factorize(num):
       if num == 1: return factors
   return None
 
+def sqrt_mod(n, p):
+  # brute force, can replace with Tonelli-Shanks
+  # find x such that (x*x) % p == n
+  n %= p
+  for x in range(p):
+    if (x * x) % p == n: return x
+  raise ValueError(f"no sqrt_mod for {n=} and {p=}")
+
 # this is the magic polynomial of Quadratic Sieve
 def Q(x, a, delta):
   # TODO: MPQS and SIQS use multiple polynomials here, not just one
-  #return (a+x)*(a+x) - N
+  #return (x+a)*(x+a) - N
   # FOIL to x*x + 2*a*x + a*a - N
   return x*x + 2*a*x + delta
 
@@ -80,8 +88,19 @@ def qsieve(N):
 
   st = time.perf_counter()
   # compute the ROOTS for each prime in FACTOR_BASE
-  # Q(x) == 0 mod p
-  ROOTS = {p:list(set([x for x in range(p) if Q(x, a, delta) % p == 0])) for p in FACTOR_BASE}
+  # Q(x) % p == 0 (solve for x)
+  assert FACTOR_BASE[0] == 2, "two isn't used?"
+  ROOTS = {2:[(1-a)%2]} # 0 == (x*x + 2*a*x + a*a - N) % 2 == x + a - 1 -> 1-a == x
+  for p in FACTOR_BASE[1:]:
+    # odd primes have two roots
+    # 0 == ((x+a)^2 - N) % p
+    # N == (x+a)^2 % p
+    s = sqrt_mod(N, p)  # s*s == N % p
+    # so x+a == +/- s % p
+    r1 = ( s - a) % p
+    r2 = (-s - a) % p
+    assert r1 != r2
+    ROOTS[p] = [r1, r2]
 
   # precompute the logs of the primes and put roots in a list
   ROOTS_LIST = []
@@ -137,6 +156,7 @@ def qsieve(N):
   print(f"collected {len(relations)=} in {time.perf_counter()-st:.2f} s")
   print(f"searched {searched} values of Q")
   print(f"got {log_sieve_false_positive} false positives from log sieve")
+  assert log_sieve_false_positive < 5
 
   # we need to find a basis among the parity masks
   congruence_false_positive = 0
@@ -174,6 +194,7 @@ def qsieve(N):
   else:
     raise RuntimeError("failed to find congruence")
   print(f"got {congruence_false_positive} false positives from congruence")
+  assert congruence_false_positive < 5
 
 if __name__ == "__main__":
   qsieve(N)
