@@ -37,14 +37,15 @@ del p,q
 B = 100000
 
 # params for log sieve
-BLOCK_SIZE = 4096
+BLOCK_SIZE = 16384
 LOG_SIEVE_THRESHOLD = math.log(B)
 
 # generate primes up to B filtered by quadratic residue
 # https://en.wikipedia.org/wiki/Euler%27s_criterion
 FACTOR_BASE = [2] + [p for p in range(3, B+1, 2) if isprime(p) and pow(N, (p-1)//2, p) == 1]
 NUM_RELATIONS = len(FACTOR_BASE) + max(8, len(FACTOR_BASE) // 10)
-print(f"{B=} {max(FACTOR_BASE)=} {len(FACTOR_BASE)=} {NUM_RELATIONS=} {LOG_SIEVE_THRESHOLD=:.2f}")
+FACTOR_BASE_SMALL = [x for x in FACTOR_BASE if x < BLOCK_SIZE]
+print(f"{B=} {max(FACTOR_BASE)=} {len(FACTOR_BASE)=} {len(FACTOR_BASE_SMALL)=} {NUM_RELATIONS=} {LOG_SIEVE_THRESHOLD=:.2f}")
 
 def format_factors(factors):
   return ' * '.join([f"{p}^{f}" if f > 1 else f"{p}" for p,f in zip(FACTOR_BASE, factors) if f > 0])
@@ -137,15 +138,14 @@ def qsieve(N):
     # check for success
     for j in range(BLOCK_SIZE):
       if scores[j] < LOG_SIEVE_THRESHOLD:
-        x = x_block+j
-        likely_relations.append(x)
-        progress.set_description(f"{x:15d}")
+        likely_relations.append(x_block+j)
     searched += 1
+    progress.set_description(f"{searched:5d} blocks, {len(likely_relations)/searched:.2f} relations/block")
     progress.update(min(NUM_RELATIONS, len(likely_relations))-progress.n)
     if len(likely_relations) >= NUM_RELATIONS: break
   progress.close()
   print(f"collected {len(likely_relations)=} in {time.perf_counter()-st:.2f} s")
-  print(f"searched {searched} buckets of {BLOCK_SIZE}")
+  print(f"searched {searched} blocks of {BLOCK_SIZE}")
 
   # now we extract the real relations from the log_sieve
   st = time.perf_counter()
