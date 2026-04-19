@@ -22,7 +22,7 @@ def gen_prime(bits):
   return ret
 
 # generate
-SEMIPRIME_BITS = 50
+SEMIPRIME_BITS = 60
 # generate number for factoring (N)
 while 1:
   p,q = gen_prime(SEMIPRIME_BITS), gen_prime(SEMIPRIME_BITS)
@@ -34,7 +34,7 @@ while 1:
 del p,q
 
 # params for the solver
-B = 60000
+B = 100000
 
 # params for log sieve
 BLOCK_SIZE = 4096
@@ -147,17 +147,18 @@ def qsieve(N):
   print(f"searched {searched} buckets of {BLOCK_SIZE}")
 
   # now we extract the real relations from the log_sieve
+  st = time.perf_counter()
   relations = []
   for x in likely_relations:
     if relation:=b_smooth_factorize(abs(Q(x, a, delta))):
       relations.append((x, relation))
-
-  # then we need to solve to make a perfect square from the relations
   log_sieve_false_positive = len(likely_relations) - len(relations)
-  print(f"got {log_sieve_false_positive} false positives from log sieve")
+  print(f"got {log_sieve_false_positive=} in {time.perf_counter()-st:.2f} s")
   assert log_sieve_false_positive < 5
 
+  # then we need to solve to make a perfect square from the relations
   # we need to find a basis among the parity masks
+  st = time.perf_counter()
   congruence_false_positive = 0
   basis = {}
   for i, (x, relation) in enumerate(relations):
@@ -192,7 +193,7 @@ def qsieve(N):
       else: congruence_false_positive += 1
   else:
     raise RuntimeError("failed to find congruence")
-  print(f"got {congruence_false_positive} false positives from congruence")
+  print(f"solved with {congruence_false_positive=} in {time.perf_counter()-st:.2f} s")
   assert congruence_false_positive < 10
 
 if __name__ == "__main__":
