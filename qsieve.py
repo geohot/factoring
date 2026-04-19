@@ -16,29 +16,31 @@ from sympy import isprime
 # FAST (can implement with Tonelli-Shanks but meh)
 from sympy import sqrt_mod
 
+# param for the generator
+BITS = 100
+
+# use this heuristic for B
+# then *5 to deal with inefficencies in this implementation
+B = int(math.exp(0.5 * math.sqrt((BITS * math.log(2)) * math.log(BITS * math.log(2)))))
+
+# params for log sieve
+BLOCK_SIZE = 16384
+LOG_SIEVE_THRESHOLD = math.log(B)
+
 def gen_prime(bits):
   ret = random.randint((1 << (bits-1))+1, 1 << bits)
   while not isprime(ret): ret += 1
   return ret
 
-# generate
-SEMIPRIME_BITS = 60
 # generate number for factoring (N)
 while 1:
-  p,q = gen_prime(SEMIPRIME_BITS), gen_prime(SEMIPRIME_BITS)
+  p,q = gen_prime(BITS//2), gen_prime(BITS//2)
   if p==q: continue
   N = p*q
   print(f"factoring {N} into {p} {q} with {N.bit_length()} bits")
   break
 # no cheating
 del p,q
-
-# params for the solver
-B = 100000
-
-# params for log sieve
-BLOCK_SIZE = 16384
-LOG_SIEVE_THRESHOLD = math.log(B)
 
 # generate primes up to B filtered by quadratic residue
 # https://en.wikipedia.org/wiki/Euler%27s_criterion
@@ -118,6 +120,7 @@ def qsieve(N):
   # we use a log sieve to prefilter everything
   st = time.perf_counter()
   likely_relations = []
+  partials = []
   progress = tqdm.tqdm(total=NUM_RELATIONS)
   searched = 0
   # NOTE: we explore both negative and positive x
@@ -138,14 +141,17 @@ def qsieve(N):
 
     # check for success
     for j in range(BLOCK_SIZE):
-      if scores[j] < LOG_SIEVE_THRESHOLD:
-        likely_relations.append(x_block+j)
+      if scores[j] < (2*LOG_SIEVE_THRESHOLD+1):
+        partials.append(x_block+j)
+        if scores[j] < LOG_SIEVE_THRESHOLD:
+          likely_relations.append(x_block+j)
     searched += 1
     progress.set_description(f"{searched:5d} blocks, {len(likely_relations)/searched:.2f} relations/block")
     progress.update(min(NUM_RELATIONS, len(likely_relations))-progress.n)
     if len(likely_relations) >= NUM_RELATIONS: break
   progress.close()
   print(f"collected {len(likely_relations)=} across {searched} blocks in {time.perf_counter()-st:.2f} s")
+  print(f"{len(partials)*100./(searched*BLOCK_SIZE):.2f}%, {len(partials)=} of {searched*BLOCK_SIZE} for large prime")
 
   # now we extract the real relations from the log_sieve
   st = time.perf_counter()
@@ -159,6 +165,7 @@ def qsieve(N):
 
   # then we need to solve to make a perfect square from the relations
   # we need to find a basis among the parity masks
+  print(f"matrix size is {len(relations)} x {len(FACTOR_BASE)+1}")
   st = time.perf_counter()
   congruence_false_positive = 0
   basis = {}
