@@ -2,17 +2,27 @@
 import math, random, tqdm, time, itertools
 
 # SLOW
-#def is_prime(n): return n > 1 and all(n%d for d in range(2, math.isqrt(n)+1))
+#def isprime(n): return n > 1 and all(n%d for d in range(2, math.isqrt(n)+1))
 # FAST (can implement Miller-Rabin but meh)
-from sympy import isprime as is_prime
+from sympy import isprime
+
+# find x such that (x*x) % p == n
+# SLOW
+#def sqrt_mod(n, p):
+#  n %= p
+#  for x in range(p):
+#    if (x * x) % p == n: return x
+#  raise ValueError(f"no sqrt_mod for {n=} and {p=}")
+# FAST (can implement with Tonelli-Shanks but meh)
+from sympy import sqrt_mod
 
 def gen_prime(bits):
   ret = random.randint((1 << (bits-1))+1, 1 << bits)
-  while not is_prime(ret): ret += 1
+  while not isprime(ret): ret += 1
   return ret
 
 # generate
-SEMIPRIME_BITS = 40
+SEMIPRIME_BITS = 50
 # generate number for factoring (N)
 while 1:
   p,q = gen_prime(SEMIPRIME_BITS), gen_prime(SEMIPRIME_BITS)
@@ -24,7 +34,7 @@ while 1:
 del p,q
 
 # params for the solver
-B = 10000
+B = 60000
 
 # params for log sieve
 BLOCK_SIZE = 4096
@@ -32,7 +42,7 @@ LOG_SIEVE_THRESHOLD = math.log(B)
 
 # generate primes up to B filtered by quadratic residue
 # https://en.wikipedia.org/wiki/Euler%27s_criterion
-FACTOR_BASE = [2] + [p for p in range(3, B+1, 2) if is_prime(p) and pow(N, (p-1)//2, p) == 1]
+FACTOR_BASE = [2] + [p for p in range(3, B+1, 2) if isprime(p) and pow(N, (p-1)//2, p) == 1]
 NUM_RELATIONS = len(FACTOR_BASE) + max(8, len(FACTOR_BASE) // 10)
 print(f"{B=} {max(FACTOR_BASE)=} {len(FACTOR_BASE)=} {NUM_RELATIONS=} {LOG_SIEVE_THRESHOLD=:.2f}")
 
@@ -64,14 +74,6 @@ def b_smooth_factorize(num):
       if num == 1: return factors
   return None
 
-def sqrt_mod(n, p):
-  # brute force, can replace with Tonelli-Shanks
-  # find x such that (x*x) % p == n
-  n %= p
-  for x in range(p):
-    if (x * x) % p == n: return x
-  raise ValueError(f"no sqrt_mod for {n=} and {p=}")
-
 # this is the magic polynomial of Quadratic Sieve
 def Q(x, a, delta):
   # TODO: MPQS and SIQS use multiple polynomials here, not just one
@@ -101,6 +103,7 @@ def qsieve(N):
     r2 = (-s - a) % p
     assert r1 != r2
     ROOTS[p] = [r1, r2]
+  print(f"computed {len(ROOTS)=} in {time.perf_counter()-st:.2f} s")
 
   # precompute the logs of the primes and put roots in a list
   ROOTS_LIST = []
@@ -108,18 +111,14 @@ def qsieve(N):
     log_p = math.log(p)
     for root in ROOTS[p]:
       ROOTS_LIST.append((root,p,log_p))
-  print(f"{len(ROOTS_LIST)=} in {time.perf_counter()-st:.2f} s")
 
   # first we need to find B-smooth Q(x) values
   st = time.perf_counter()
-  relations = []
+  likely_relations = []
   progress = tqdm.tqdm(total=NUM_RELATIONS)
-  log_sieve_false_positive = 0
   searched = 0
-
-  # after the max here it gets dumb
   # NOTE: we explore both negative and positive x
-  BOUND = math.isqrt(2*N)-a
+  BOUND = math.isqrt(2*N)-a  # after the max here it gets dumb
   for x_block in itertools.chain.from_iterable(zip(
                     range(1, BOUND, BLOCK_SIZE),
                     range(-BLOCK_SIZE, -BOUND, -BLOCK_SIZE))):
@@ -127,6 +126,7 @@ def qsieve(N):
     scores = [math.log(abs(Q(x_block + j, a_f, delta_f))) for j in range(BLOCK_SIZE)]
 
     # sieve with the dividing roots
+    # NOTE: we tried bucket sieve, it wasn't much faster and it was more complex
     for root,p,log_p in ROOTS_LIST:
       j = (root - x_block) % p
       while j < BLOCK_SIZE:
@@ -135,26 +135,25 @@ def qsieve(N):
 
     # check for success
     for j in range(BLOCK_SIZE):
-      # if we fully divided it, it's a good relation
       if scores[j] < LOG_SIEVE_THRESHOLD:
         x = x_block+j
-        if relation:=b_smooth_factorize(abs(Q(x, a, delta))):
-          progress.set_description(f"{x}")
-          relations.append((x, relation))
-        else:
-          # NOTE: this can miss if the threshold is high
-          # the log doesn't include multiple
-          log_sieve_false_positive += 1
-
-    # are we done after this block?
-    searched += BLOCK_SIZE
-    progress.update(min(NUM_RELATIONS, len(relations))-progress.n)
-    if len(relations) >= NUM_RELATIONS: break
+        likely_relations.append(x)
+        progress.set_description(f"{x:15d}")
+    searched += 1
+    progress.update(min(NUM_RELATIONS, len(likely_relations))-progress.n)
+    if len(likely_relations) >= NUM_RELATIONS: break
   progress.close()
+  print(f"collected {len(likely_relations)=} in {time.perf_counter()-st:.2f} s")
+  print(f"searched {searched} buckets of {BLOCK_SIZE}")
+
+  # now we extract the real relations from the log_sieve
+  relations = []
+  for x in likely_relations:
+    if relation:=b_smooth_factorize(abs(Q(x, a, delta))):
+      relations.append((x, relation))
 
   # then we need to solve to make a perfect square from the relations
-  print(f"collected {len(relations)=} in {time.perf_counter()-st:.2f} s")
-  print(f"searched {searched} values of Q")
+  log_sieve_false_positive = len(likely_relations) - len(relations)
   print(f"got {log_sieve_false_positive} false positives from log sieve")
   assert log_sieve_false_positive < 5
 
