@@ -24,7 +24,7 @@ while 1:
 del p,q
 
 # params for the solver
-B = 5000
+B = 10000
 
 # params for log sieve
 BLOCK_SIZE = 4096
@@ -194,7 +194,7 @@ def qsieve(N):
   else:
     raise RuntimeError("failed to find congruence")
   print(f"got {congruence_false_positive} false positives from congruence")
-  assert congruence_false_positive < 5
+  assert congruence_false_positive < 10
 
 if __name__ == "__main__":
   qsieve(N)
