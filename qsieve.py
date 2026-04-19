@@ -1,8 +1,5 @@
 # quadratic sieve to start
-import math
-import random
-import tqdm
-import time
+import math, random, tqdm, time, itertools
 
 # SLOW
 #def is_prime(n): return n > 1 and all(n%d for d in range(2, math.isqrt(n)+1))
@@ -67,24 +64,24 @@ def b_smooth_factorize(num):
       if num == 1: return factors
   return None
 
+# this is the magic polynomial of Quadratic Sieve
+def Q(x, a, delta):
+  # TODO: MPQS and SIQS use multiple polynomials here, not just one
+  #return (a+x)*(a+x) - N
+  # FOIL to x*x + 2*a*x + a*a - N
+  return x*x + 2*a*x + delta
+
 def qsieve(N):
   a = math.isqrt(N)
   delta = a*a - N
-  # this is the magic polynomial of Quadratic Sieve
-  def Q(x):
-    # TODO: MPQS and SIQS use multiple polynomials here, not just one
-    #return (a+x)*(a+x) - N
-    # FOIL to x*x + 2*a*x + a*a - N
-    return x*x + 2*a*x + delta
 
   # for log(Q(x)) approx
   a_f, delta_f = float(a), float(delta)
-  def Qf(x): return x*x + 2*a_f*x + delta_f
 
   st = time.perf_counter()
   # compute the ROOTS for each prime in FACTOR_BASE
   # Q(x) == 0 mod p
-  ROOTS = {p:list(set([x for x in range(p) if Q(x) % p == 0])) for p in FACTOR_BASE}
+  ROOTS = {p:list(set([x for x in range(p) if Q(x, a, delta) % p == 0])) for p in FACTOR_BASE}
 
   # precompute the logs of the primes and put roots in a list
   ROOTS_LIST = []
@@ -102,10 +99,13 @@ def qsieve(N):
   searched = 0
 
   # after the max here it gets dumb
-  # TODO: we can explore both negative and positive x
-  for x_block in range(1, math.isqrt(2*N)-a, BLOCK_SIZE):
+  # NOTE: we explore both negative and positive x
+  BOUND = math.isqrt(2*N)-a
+  for x_block in itertools.chain.from_iterable(zip(
+                    range(1, BOUND, BLOCK_SIZE),
+                    range(-BLOCK_SIZE, -BOUND, -BLOCK_SIZE))):
     # we approximate log(Q(x)) in float
-    scores = [math.log(Qf(x_block + j)) for j in range(BLOCK_SIZE)]
+    scores = [math.log(abs(Q(x_block + j, a_f, delta_f))) for j in range(BLOCK_SIZE)]
 
     # sieve with the dividing roots
     for root,p,log_p in ROOTS_LIST:
@@ -119,9 +119,9 @@ def qsieve(N):
       # if we fully divided it, it's a good relation
       if scores[j] < LOG_SIEVE_THRESHOLD:
         x = x_block+j
-        if relation:=b_smooth_factorize(Q(x)):
-          progress.set_description(f"{a+x}")
-          relations.append((a+x, relation))
+        if relation:=b_smooth_factorize(abs(Q(x, a, delta))):
+          progress.set_description(f"{x}")
+          relations.append((x, relation))
         else:
           # NOTE: this can miss if the threshold is high
           # the log doesn't include multiple
@@ -139,9 +139,12 @@ def qsieve(N):
   print(f"got {log_sieve_false_positive} false positives from log sieve")
 
   # we need to find a basis among the parity masks
+  congruence_false_positive = 0
   basis = {}
-  for i,(_,relation) in enumerate(relations):
+  for i, (x, relation) in enumerate(relations):
     mask = sum(1 << i for i,n in enumerate(relation) if n&1)
+    # NOTE: it works fine without this line? because process_congruence is retried?
+    if x < 0: mask |= 1 << len(FACTOR_BASE)
     combo = 1 << i
     while mask:
       # what's the largest number in mask
@@ -161,14 +164,16 @@ def qsieve(N):
     if mask == 0:
       nums = []
       factors = [0]*len(FACTOR_BASE)
-      for j,(num,relation) in enumerate(relations):
+      for j,(x,relation) in enumerate(relations):
         if combo&(1<<j):
-          nums.append(num)
+          nums.append(a+x)
           for k,n in enumerate(relation):
             factors[k] += n
       if process_congruence(N, nums, factors): break
+      else: congruence_false_positive += 1
   else:
     raise RuntimeError("failed to find congruence")
+  print(f"got {congruence_false_positive} false positives from congruence")
 
 if __name__ == "__main__":
   qsieve(N)
