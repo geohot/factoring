@@ -1,5 +1,5 @@
 # quadratic sieve to start
-import math, random, tqdm, time, itertools, collections
+import math, random, tqdm, time, itertools, collections, functools
 
 # SLOW
 #def isprime(n): return n > 1 and all(n%d for d in range(2, math.isqrt(n)+1))
@@ -23,16 +23,19 @@ BITS = 120
 B = int(math.exp(0.5 * math.sqrt((BITS * math.log(2)) * math.log(BITS * math.log(2)))))
 
 # hack to deal with inefficencies in this implementation (makes it way faster)
-#B *= 3
+#B *= 2
 
 # large prime bound
 LP_BOUND = 32*B
 
 # params for log sieve
 BLOCK_SIZE = 4096
-BLOCKS_PER_SUPERBLOCK = 64
+BLOCKS_PER_SUPERBLOCK = 256 # TODO: on just the GPU, this should be a lot bigger
 SUPERBLOCK_SIZE = BLOCK_SIZE*BLOCKS_PER_SUPERBLOCK
 LOG_SIEVE_THRESHOLD = math.log(LP_BOUND)
+
+# this is just the block size
+SMALL_ROOT_THRESHOLD = SUPERBLOCK_SIZE
 
 def gen_prime(bits):
   ret = random.randint((1 << (bits-1))+1, 1 << bits)
@@ -44,16 +47,15 @@ while 1:
   p,q = gen_prime(BITS//2), gen_prime(BITS//2)
   if p==q: continue
   N = p*q
-  print(f"factoring {N} into {p} {q} with {N.bit_length()} bits")
   break
-# no cheating
-del p,q
+print(f"factoring {N} into {p} {q} with {N.bit_length()} bits")
+del p,q # no cheating
 
 # generate primes up to B filtered by quadratic residue
 # https://en.wikipedia.org/wiki/Euler%27s_criterion
 FACTOR_BASE = [2] + [p for p in range(3, B+1, 2) if isprime(p) and pow(N, (p-1)//2, p) == 1]
 NUM_RELATIONS = len(FACTOR_BASE) + max(8, len(FACTOR_BASE) // 10)
-FACTOR_BASE_SMALL = [x for x in FACTOR_BASE if x < BLOCK_SIZE]
+FACTOR_BASE_SMALL = [x for x in FACTOR_BASE if x < SMALL_ROOT_THRESHOLD]
 print(f"{B=} {max(FACTOR_BASE)=} {len(FACTOR_BASE)=} {len(FACTOR_BASE_SMALL)=}")
 print(f"{NUM_RELATIONS=} {LOG_SIEVE_THRESHOLD=:.2f} {BLOCK_SIZE=} {SUPERBLOCK_SIZE=}")
 
@@ -103,6 +105,8 @@ def Q(x, a, delta):
   # FOIL to x*x + 2*a*x + a*a - N
   return x*x + 2*a*x + delta
 
+from tinygrad import Tensor
+
 def do_superblock_sieve(x_superblock, SMALL_ROOTS_LIST, LARGE_ROOTS_LIST, a_f, delta_f):
   # compute buckets
   buckets = [[] for _ in range(BLOCKS_PER_SUPERBLOCK)]
@@ -115,7 +119,10 @@ def do_superblock_sieve(x_superblock, SMALL_ROOTS_LIST, LARGE_ROOTS_LIST, a_f, d
   ret = []
   for block_num, x_block in enumerate(range(x_superblock, x_superblock+SUPERBLOCK_SIZE, BLOCK_SIZE)):
     # we approximate log(Q(x)) in float
-    scores = [math.log(abs(Q(x_block + j, a_f, delta_f))) for j in range(BLOCK_SIZE)]
+    scores = [math.log(abs(Q(x, a_f, delta_f))) for x in range(x_block, x_block+BLOCK_SIZE)]
+
+    # sieve with the bucket
+    for j,log_p in buckets[block_num]: scores[j] -= log_p
 
     # sieve with the small roots
     for root,p,log_p in SMALL_ROOTS_LIST:
@@ -123,9 +130,6 @@ def do_superblock_sieve(x_superblock, SMALL_ROOTS_LIST, LARGE_ROOTS_LIST, a_f, d
       while j < BLOCK_SIZE:
         scores[j] -= log_p
         j += p
-
-    # sieve with the bucket
-    for j,log_p in buckets[block_num]: scores[j] -= log_p
 
     # check for success
     for j in range(BLOCK_SIZE):
@@ -135,6 +139,7 @@ def do_superblock_sieve(x_superblock, SMALL_ROOTS_LIST, LARGE_ROOTS_LIST, a_f, d
 def qsieve(N):
   a = math.isqrt(N)
   delta = a*a - N
+  BOUND = math.isqrt(2*N)-a  # after the max here it gets dumb
 
   # for log(Q(x)) approx
   a_f, delta_f = float(a), float(delta)
@@ -157,12 +162,25 @@ def qsieve(N):
   print(f"computed {len(ROOTS)=} in {time.perf_counter()-st:.2f} s")
 
   # precompute the logs of the primes and put roots in a list
-  SMALL_ROOTS_LIST = []
-  LARGE_ROOTS_LIST = []
+  ROOTS_LIST = []
   for p in FACTOR_BASE:
     log_p = math.log(p)
     for root in ROOTS[p]:
-      (SMALL_ROOTS_LIST if p < BLOCK_SIZE else LARGE_ROOTS_LIST).append((root,p,log_p))
+      ROOTS_LIST.append((root,p,log_p))
+
+  gpu_roots = Tensor([x[0] for x in ROOTS_LIST])
+  gpu_p = Tensor([x[1] for x in ROOTS_LIST])
+  def do_superblock_sieve_gpu(x_superblock, a_f, delta_f):
+    rng = Tensor([x_superblock]) + Tensor.arange(0, SUPERBLOCK_SIZE)
+    sieve = Q(rng, a_f, delta_f).abs().log()
+    sieve = sieve - ((((gpu_roots - rng.reshape(-1, 1)) % gpu_p) == 0).float() * gpu_p.log()).sum(1)
+    hit = (sieve<LOG_SIEVE_THRESHOLD).tolist()
+
+    ret = []
+    # check for success
+    for j in range(SUPERBLOCK_SIZE):
+      if hit[j]: ret.append(x_superblock+j)
+    return ret
 
   # first we need to find B-smooth Q(x) values
   # we use a log sieve to prefilter everything
@@ -175,7 +193,6 @@ def qsieve(N):
   log_sieve_false_positive = 0
   sieve_time_s = 0.0
   # NOTE: we explore both negative and positive x
-  BOUND = math.isqrt(2*N)-a  # after the max here it gets dumb
   superblock_schedule_order = itertools.chain.from_iterable(zip(
     range(1, BOUND, SUPERBLOCK_SIZE),
     range(-SUPERBLOCK_SIZE, -BOUND, -SUPERBLOCK_SIZE)))
@@ -183,7 +200,7 @@ def qsieve(N):
   for x_superblock in superblock_schedule_order:
     # here we extract the real relations from the log_sieve
     inner_st = time.perf_counter()
-    sieved = do_superblock_sieve(x_superblock, SMALL_ROOTS_LIST, LARGE_ROOTS_LIST, a_f, delta_f)
+    sieved = do_superblock_sieve_gpu(x_superblock, a_f, delta_f)
     sieve_time_s += time.perf_counter() - inner_st
     for x in sieved:
       relation, num = b_smooth_factorize(abs(Q(x, a, delta)))
