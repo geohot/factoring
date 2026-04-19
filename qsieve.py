@@ -45,7 +45,8 @@ LOG_SIEVE_THRESHOLD = math.log(B)
 FACTOR_BASE = [2] + [p for p in range(3, B+1, 2) if isprime(p) and pow(N, (p-1)//2, p) == 1]
 NUM_RELATIONS = len(FACTOR_BASE) + max(8, len(FACTOR_BASE) // 10)
 FACTOR_BASE_SMALL = [x for x in FACTOR_BASE if x < BLOCK_SIZE]
-print(f"{B=} {max(FACTOR_BASE)=} {len(FACTOR_BASE)=} {len(FACTOR_BASE_SMALL)=} {NUM_RELATIONS=} {LOG_SIEVE_THRESHOLD=:.2f}")
+print(f"{B=} {max(FACTOR_BASE)=} {len(FACTOR_BASE)=} {len(FACTOR_BASE_SMALL)=}")
+print(f"{NUM_RELATIONS=} {LOG_SIEVE_THRESHOLD=:.2f} {BLOCK_SIZE=}")
 
 def format_factors(factors):
   return ' * '.join([f"{p}^{f}" if f > 1 else f"{p}" for p,f in zip(FACTOR_BASE, factors) if f > 0])
@@ -144,8 +145,7 @@ def qsieve(N):
     progress.update(min(NUM_RELATIONS, len(likely_relations))-progress.n)
     if len(likely_relations) >= NUM_RELATIONS: break
   progress.close()
-  print(f"collected {len(likely_relations)=} in {time.perf_counter()-st:.2f} s")
-  print(f"searched {searched} blocks of {BLOCK_SIZE}")
+  print(f"collected {len(likely_relations)=} across {searched} blocks in {time.perf_counter()-st:.2f} s")
 
   # now we extract the real relations from the log_sieve
   st = time.perf_counter()
