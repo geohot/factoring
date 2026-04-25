@@ -21,7 +21,7 @@ from sympy import sqrt_mod
 from tinygrad import Tensor, getenv
 
 # param for the generator
-BITS = 140
+BITS = 150
 
 # use this heuristic for B
 B = int(math.exp(0.5 * math.sqrt((BITS * math.log(2)) * math.log(BITS * math.log(2)))))
@@ -35,9 +35,9 @@ LP_BOUND = 32*B
 
 # params for log sieve
 BLOCK_SIZE = 4096
-BLOCKS_PER_SUPERBLOCK = 1024 if GPU else 256 # TODO: on just the GPU, this should be a lot bigger
+BLOCKS_PER_SUPERBLOCK = 256 # TODO: on just the GPU, this should be a lot bigger
 SUPERBLOCK_SIZE = BLOCK_SIZE*BLOCKS_PER_SUPERBLOCK
-LOG_SIEVE_THRESHOLD = math.log(LP_BOUND)
+LOG_SIEVE_THRESHOLD = math.log(LP_BOUND) + 0.5
 
 # this is just the block size
 SMALL_ROOT_THRESHOLD = SUPERBLOCK_SIZE
@@ -61,8 +61,9 @@ del p,q # no cheating
 FACTOR_BASE = [2] + [p for p in range(3, B+1, 2) if isprime(p) and pow(N, (p-1)//2, p) == 1]
 NUM_RELATIONS = len(FACTOR_BASE) + max(8, len(FACTOR_BASE) // 10)
 FACTOR_BASE_SMALL = [x for x in FACTOR_BASE if x < SMALL_ROOT_THRESHOLD]
+LS_SCALE = 1 << 32
 print(f"{B=} {max(FACTOR_BASE)=} {len(FACTOR_BASE)=} {len(FACTOR_BASE_SMALL)=}")
-print(f"{NUM_RELATIONS=} {LOG_SIEVE_THRESHOLD=:.2f} {BLOCK_SIZE=} {SUPERBLOCK_SIZE=}")
+print(f"{NUM_RELATIONS=} {LOG_SIEVE_THRESHOLD=:.2f} {BLOCK_SIZE=} {SUPERBLOCK_SIZE=} {math.log(LS_SCALE):f=}")
 
 def format_factors(factors):
   return ' * '.join([f"{p}^{f}" if f > 1 else f"{p}" for p,f in zip(FACTOR_BASE, factors) if f > 0])
@@ -103,21 +104,26 @@ def b_smooth_factorize(num):
       if num == 1: return factors, num
   return factors, num
 
-# this is the magic polynomial of Quadratic Sieve
-def Q(x, a, delta):
-  # TODO: MPQS and SIQS use multiple polynomials here, not just one
-  #return (x+a)*(x+a) - N
-  # FOIL to x*x + 2*a*x + a*a - N
-  return x*x + 2*a*x + delta
-
 class QFunction:
-  def __init__(self, N, A, B, use_float=False):
+  def __init__(self, N, A, B):
     self.N = N
     C = (B*B - N) // A
-    if use_float: A,B,C = float(A), float(B), float(C)
     self.A, self.B, self.C = A, B, C
   def __call__(self, x):
     return self.A*x*x + 2*self.B*x + self.C
+
+def do_superblock_sieve_gpu(Q:QFunction, gpu_roots, gpu_p, x_superblock):
+  x = Tensor([x_superblock]) + Tensor.arange(0, SUPERBLOCK_SIZE)
+  #sieve = Q(rng).abs().log()
+  sieve = ((float(Q.A)/LS_SCALE)*x*x + 2*(float(Q.B)/LS_SCALE)*x + (float(Q.C)/LS_SCALE)).abs().log() + math.log(LS_SCALE)
+  sieve = sieve - ((((gpu_roots - x.reshape(-1, 1)) % gpu_p) == 0).float() * gpu_p.log()).sum(1)
+  hit = (sieve<LOG_SIEVE_THRESHOLD).tolist()
+
+  ret = []
+  # check for success
+  for j in range(SUPERBLOCK_SIZE):
+    if hit[j]: ret.append(x_superblock+j)
+  return ret
 
 def do_superblock_sieve(Q, ROOTS_LIST, x_superblock):
   ret = []
@@ -135,18 +141,6 @@ def do_superblock_sieve(Q, ROOTS_LIST, x_superblock):
     # check for success
     for j in range(BLOCK_SIZE):
       if scores[j] < LOG_SIEVE_THRESHOLD: ret.append(x_block+j)
-  return ret
-
-def do_superblock_sieve_gpu(Q, gpu_roots, gpu_p, x_superblock):
-  rng = Tensor([x_superblock]) + Tensor.arange(0, SUPERBLOCK_SIZE)
-  sieve = Q(rng).abs().log()
-  sieve = sieve - ((((gpu_roots - rng.reshape(-1, 1)) % gpu_p) == 0).float() * gpu_p.log()).sum(1)
-  hit = (sieve<LOG_SIEVE_THRESHOLD).tolist()
-
-  ret = []
-  # check for success
-  for j in range(SUPERBLOCK_SIZE):
-    if hit[j]: ret.append(x_superblock+j)
   return ret
 
 def roots_for_factor_base(Q:QFunction, FACTOR_BASE):
@@ -185,9 +179,7 @@ def qsieve_get_relations(N, A, B, superblock_schedule_order, rs:RelationState):
   # A must fully factorize
   A_relation, rem = b_smooth_factorize(A)
   assert rem == 1
-
   Q = QFunction(N, A, B)
-  Q_f = QFunction(N, A, B, use_float=True)
 
   st = time.perf_counter()
   # compute the ROOTS for each prime in FACTOR_BASE
@@ -203,11 +195,11 @@ def qsieve_get_relations(N, A, B, superblock_schedule_order, rs:RelationState):
       ROOTS_LIST.append((root,p,log_p))
 
   if GPU:
-    my_superblock_sieve = functools.partial(do_superblock_sieve_gpu, Q_f,
+    my_superblock_sieve = functools.partial(do_superblock_sieve_gpu, Q,
                                             Tensor([x[0] for x in ROOTS_LIST]),
                                             Tensor([x[1] for x in ROOTS_LIST]))
   else:
-    my_superblock_sieve = functools.partial(do_superblock_sieve, Q_f, ROOTS_LIST)
+    my_superblock_sieve = functools.partial(do_superblock_sieve, Q, ROOTS_LIST)
 
   # first we need to find B-smooth Q(x) values
   # we use a log sieve to prefilter everything
@@ -249,7 +241,8 @@ def qsieve_get_relations(N, A, B, superblock_schedule_order, rs:RelationState):
     rs.searched += 1
     rs.progress.set_description(f"{rs.searched:5d} b, {(len(rs.relations)-start_relations):3d} r/b, "
                              f"{(len(rs.relations)-begin_relations)-partial_match:3d}+{partial_match:3d} p, "
-                             f"{rs.log_sieve_false_positive} fp, {rs.log_sieve_duplicate} dup, A={Q.A}")
+                             f"{rs.log_sieve_false_positive*100./(len(rs.relations)+rs.log_sieve_false_positive):.1f}% fp, "
+                             f"{rs.log_sieve_duplicate} dup, A={Q.A}")
     rs.progress.update(min(NUM_RELATIONS, len(rs.relations))-rs.progress.n)
     if len(rs.relations) >= NUM_RELATIONS: break
   et = time.perf_counter()-st
