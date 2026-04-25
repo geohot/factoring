@@ -223,15 +223,15 @@ def qsieve_get_relations(N, A, B, superblock_schedule_order, rs:RelationState):
     sieved = my_superblock_sieve(x_superblock)
     sieve_time_s += time.perf_counter() - inner_st
     for x in sieved:
-      q = Q(x)
-      relation, num = b_smooth_factorize(abs(q))
-      # the A relation needs to be included in all relations for that polynomial
-      relation = [u + v for u, v in zip(A_relation, relation)]
       lhs = A*x + B
       key = lhs%N
       if key in rs.seen:
         rs.log_sieve_duplicate += 1
         continue
+      q = Q(x)
+      relation, num = b_smooth_factorize(abs(q))
+      # the A relation needs to be included in all relations for that polynomial
+      relation = [u + v for u, v in zip(A_relation, relation)]
       rs.seen.add(key)
       neg = q < 0
       if num == 1: rs.relations.append((lhs, relation, neg, 1))
