@@ -21,7 +21,7 @@ from sympy import sqrt_mod
 from tinygrad import Tensor, getenv
 
 # param for the generator
-BITS = 150
+BITS = getenv("BITS", 140)
 
 # use this heuristic for B
 B = int(math.exp(0.5 * math.sqrt((BITS * math.log(2)) * math.log(BITS * math.log(2)))))
