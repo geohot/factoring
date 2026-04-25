@@ -34,13 +34,10 @@ GPU = getenv("GPU", 1)
 LP_BOUND = 32*B
 
 # params for log sieve
-BLOCK_SIZE = 4096
-BLOCKS_PER_SUPERBLOCK = 256 # TODO: on just the GPU, this should be a lot bigger
+BLOCK_SIZE = 4096*256
+BLOCKS_PER_SUPERBLOCK = 8 # TODO: on just the GPU, this should be a lot bigger
 SUPERBLOCK_SIZE = BLOCK_SIZE*BLOCKS_PER_SUPERBLOCK
 LOG_SIEVE_THRESHOLD = math.log(LP_BOUND) + 0.5
-
-# this is just the block size
-SMALL_ROOT_THRESHOLD = SUPERBLOCK_SIZE
 
 def gen_prime(bits):
   ret = random.randint((1 << (bits-1))+1, 1 << bits)
@@ -60,9 +57,8 @@ del p,q # no cheating
 # https://en.wikipedia.org/wiki/Euler%27s_criterion
 FACTOR_BASE = [2] + [p for p in range(3, B+1, 2) if isprime(p) and pow(N, (p-1)//2, p) == 1]
 NUM_RELATIONS = len(FACTOR_BASE) + max(8, len(FACTOR_BASE) // 10)
-FACTOR_BASE_SMALL = [x for x in FACTOR_BASE if x < SMALL_ROOT_THRESHOLD]
 LS_SCALE = 1 << 32
-print(f"{B=} {max(FACTOR_BASE)=} {len(FACTOR_BASE)=} {len(FACTOR_BASE_SMALL)=}")
+print(f"{B=} {max(FACTOR_BASE)=} {len(FACTOR_BASE)=}")
 print(f"{NUM_RELATIONS=} {LOG_SIEVE_THRESHOLD=:.2f} {BLOCK_SIZE=} {SUPERBLOCK_SIZE=} {math.log(LS_SCALE):f=}")
 
 def format_factors(factors):
@@ -106,14 +102,16 @@ def b_smooth_factorize(num):
 
 class QFunction:
   def __init__(self, N, A, B):
+    # required
+    assert (B*B - N) % A == 0
     self.N = N
     C = (B*B - N) // A
     self.A, self.B, self.C = A, B, C
   def __call__(self, x):
     return self.A*x*x + 2*self.B*x + self.C
 
-def do_superblock_sieve_gpu(Q:QFunction, gpu_roots, gpu_p, x_superblock):
-  x = Tensor([x_superblock]) + Tensor.arange(0, SUPERBLOCK_SIZE)
+def do_block_sieve_gpu(Q:QFunction, gpu_roots, gpu_p, x_block):
+  x = Tensor([x_block]) + Tensor.arange(0, BLOCK_SIZE)
   #sieve = Q(rng).abs().log()
   sieve = ((float(Q.A)/LS_SCALE)*x*x + 2*(float(Q.B)/LS_SCALE)*x + (float(Q.C)/LS_SCALE)).abs().log() + math.log(LS_SCALE)
   sieve = sieve - ((((gpu_roots - x.reshape(-1, 1)) % gpu_p) == 0).float() * gpu_p.log()).sum(1)
@@ -121,26 +119,25 @@ def do_superblock_sieve_gpu(Q:QFunction, gpu_roots, gpu_p, x_superblock):
 
   ret = []
   # check for success
-  for j in range(SUPERBLOCK_SIZE):
-    if hit[j]: ret.append(x_superblock+j)
+  for j in range(BLOCK_SIZE):
+    if hit[j]: ret.append(x_block+j)
   return ret
 
-def do_superblock_sieve(Q, ROOTS_LIST, x_superblock):
+def do_block_sieve(Q, ROOTS_LIST, x_block):
   ret = []
-  for x_block in range(x_superblock, x_superblock+SUPERBLOCK_SIZE, BLOCK_SIZE):
-    # we approximate log(Q(x)) in float
-    scores = [math.log(abs(Q(x))) for x in range(x_block, x_block+BLOCK_SIZE)]
+  # we approximate log(Q(x)) in float
+  scores = [math.log(abs(Q(x))) for x in range(x_block, x_block+BLOCK_SIZE)]
 
-    # sieve with the roots
-    for root,p,log_p in ROOTS_LIST:
-      j = (root - x_block) % p
-      while j < BLOCK_SIZE:
-        scores[j] -= log_p
-        j += p
+  # sieve with the roots
+  for root,p,log_p in ROOTS_LIST:
+    j = (root - x_block) % p
+    while j < BLOCK_SIZE:
+      scores[j] -= log_p
+      j += p
 
-    # check for success
-    for j in range(BLOCK_SIZE):
-      if scores[j] < LOG_SIEVE_THRESHOLD: ret.append(x_block+j)
+  # check for success
+  for j in range(BLOCK_SIZE):
+    if scores[j] < LOG_SIEVE_THRESHOLD: ret.append(x_block+j)
   return ret
 
 def roots_for_factor_base(Q:QFunction, FACTOR_BASE):
@@ -195,11 +192,11 @@ def qsieve_get_relations(N, A, B, superblock_schedule_order, rs:RelationState):
       ROOTS_LIST.append((root,p,log_p))
 
   if GPU:
-    my_superblock_sieve = functools.partial(do_superblock_sieve_gpu, Q,
+    my_superblock_sieve = functools.partial(do_block_sieve_gpu, Q,
                                             Tensor([x[0] for x in ROOTS_LIST]),
                                             Tensor([x[1] for x in ROOTS_LIST]))
   else:
-    my_superblock_sieve = functools.partial(do_superblock_sieve, Q, ROOTS_LIST)
+    my_superblock_sieve = functools.partial(do_block_sieve, Q, ROOTS_LIST)
 
   # first we need to find B-smooth Q(x) values
   # we use a log sieve to prefilter everything
@@ -259,7 +256,7 @@ def qsieve(N):
     #p3 = random.choice(FACTOR_BASE)
     #if p1 == p2 or p2 == p3 or p1 == p3: continue
     #A = p1*p2*p3
-    A = random.choice([1]+FACTOR_BASE_SMALL)
+    A = random.choice([1]+FACTOR_BASE)
     for fudge in range(-10000, 10000):
       B = math.isqrt(N)+fudge
       if (B*B - N) % A == 0: break
@@ -267,15 +264,10 @@ def qsieve(N):
       #print(f"A={A} is bad")
       continue
 
-    # required
-    assert (B*B - N) % A == 0
-
     # NOTE: we explore both negative and positive x
-    ##BOUND = math.isqrt(2*N)-math.isqrt(N)  # after the max here it gets dumb
-    BOUND = SUPERBLOCK_SIZE*8
     superblock_schedule_order = itertools.chain.from_iterable(zip(
-      range(1, BOUND, SUPERBLOCK_SIZE),
-      range(-SUPERBLOCK_SIZE, -BOUND, -SUPERBLOCK_SIZE)))
+      range(1, SUPERBLOCK_SIZE, BLOCK_SIZE),
+      range(-BLOCK_SIZE, -SUPERBLOCK_SIZE, -BLOCK_SIZE)))
     qsieve_get_relations(N, A, B, superblock_schedule_order, rs)
     if len(rs.relations) >= NUM_RELATIONS: break
   rs.progress.close()
