@@ -1,5 +1,6 @@
 # quadratic sieve to start
 import math, random, tqdm, time, itertools, collections, functools
+from dataclasses import dataclass, field
 
 # SLOW
 #def isprime(n): return n > 1 and all(n%d for d in range(2, math.isqrt(n)+1))
@@ -105,11 +106,14 @@ def Q(x, a, delta):
   # FOIL to x*x + 2*a*x + a*a - N
   return x*x + 2*a*x + delta
 
-def make_Q(N, A, B, use_float=False):
-  C = (B*B - N) // A
-  if use_float: A,B,C = float(A), float(B), float(C)
-  def Q(x): return A*x*x + 2*B*x + C
-  return Q
+class QFunction:
+  def __init__(self, N, A, B, use_float=False):
+    self.N = N
+    C = (B*B - N) // A
+    if use_float: A,B,C = float(A), float(B), float(C)
+    self.A, self.B, self.C = A, B, C
+  def __call__(self, x):
+    return self.A*x*x + 2*self.B*x + self.C
 
 def do_superblock_sieve(Q, ROOTS_LIST, x_superblock):
   ret = []
@@ -142,34 +146,42 @@ def do_superblock_sieve_gpu(Q, gpu_roots, gpu_p, x_superblock):
     if hit[j]: ret.append(x_superblock+j)
   return ret
 
-def roots_for_factor_base(Q, FACTOR_BASE):
+def roots_for_factor_base(Q:QFunction, FACTOR_BASE):
   ROOTS = {}
-  for p in FACTOR_BASE: ROOTS[p] = [x for x in range(p) if Q(x)%p == 0]
-  """
-  assert FACTOR_BASE[0] == 2, "two needs to be the first thing in the factor base"
-  ROOTS = {2:[(1-B)%2]} # 0 == (x*x + 2*a*x + a*a - N) % 2 == x + a - 1 -> 1-a == x
-  for p in FACTOR_BASE[1:]:
-    # odd primes have two roots
-    # 0 == ((x+a)^2 - N) % p
-    # N == (x+a)^2 % p
-    s = sqrt_mod(N, p)  # s*s == N % p
-    # so x+a == +/- s % p
-    r1 = ( s - B) % p
-    r2 = (-s - B) % p
-    assert r1 != r2
-    ROOTS[p] = [r1, r2]
-  """
+  for p in FACTOR_BASE:
+    if p == 2:
+      # NOTE: this works for everything
+      ROOTS[p] = [x for x in range(p) if Q(x)%p == 0]
+    elif Q.A % p == 0:
+      ROOTS[p] = [(-Q.C * pow(2*Q.B, -1, p)) % p]
+    else:
+      # odd primes have two roots
+      # 0 == ((x+a)^2 - N) % p
+      # N == (x+a)^2 % p
+      s = sqrt_mod(N, p)  # s*s == N % p
+      inv_A = pow(Q.A, -1, p)
+      # so x+a == +/- s % p
+      r1 = (( s - Q.B) * inv_A) % p
+      r2 = ((-s - Q.B) * inv_A) % p
+      assert r1 != r2
+      ROOTS[p] = [r1, r2]
   return ROOTS
 
-def qsieve(N):
-  A, B = 2, math.isqrt(N)
-  assert (B*B - N) % A == 0
+@dataclass
+class RelationState:
+  relations: list = field(default_factory=list)
+  partials: dict = field(default_factory=dict)
+  seen: set = field(default_factory=set)
+  searched: int = 0
+
+def qsieve_get_relations(N, A, B, superblock_schedule_order, rs:RelationState):
+  print(f"getting relations for {A=} {B=}")
   # A must fully factorize
   A_relation, rem = b_smooth_factorize(A)
   assert rem == 1
 
-  Q = make_Q(N, A, B)
-  Q_f = make_Q(N, A, B, use_float=True)
+  Q = QFunction(N, A, B)
+  Q_f = QFunction(N, A, B, use_float=True)
 
   st = time.perf_counter()
   # compute the ROOTS for each prime in FACTOR_BASE
@@ -195,17 +207,10 @@ def qsieve(N):
   # we use a log sieve to prefilter everything
   st = time.perf_counter()
   progress = tqdm.tqdm(total=NUM_RELATIONS)
-  searched = 0
-  relations = []
-  partials = {}
   partial_match = 0
   log_sieve_false_positive = 0
+  log_sieve_duplicate = 0
   sieve_time_s = 0.0
-  # NOTE: we explore both negative and positive x
-  BOUND = math.isqrt(2*N)-math.isqrt(N)  # after the max here it gets dumb
-  superblock_schedule_order = itertools.chain.from_iterable(zip(
-    range(1, BOUND, SUPERBLOCK_SIZE),
-    range(-SUPERBLOCK_SIZE, -BOUND, -SUPERBLOCK_SIZE)))
 
   for x_superblock in superblock_schedule_order:
     # here we extract the real relations from the log_sieve
@@ -218,35 +223,60 @@ def qsieve(N):
       # the A relation needs to be included in all relations for that polynomial
       relation = [u + v for u, v in zip(A_relation, relation)]
       lhs = A*x + B
+      key = lhs%N
+      if key in rs.seen:
+        log_sieve_duplicate += 1
+        continue
+      rs.seen.add(key)
       neg = q < 0
-      if num == 1: relations.append((lhs, relation, neg, 1))
+      if num == 1: rs.relations.append((lhs, relation, neg, 1))
       elif num <= LP_BOUND and isprime(num):
-        if num in partials:
+        if num in rs.partials:
           # got a match!
-          lhs0, relation0, neg0 = partials[num]
+          lhs0, relation0, neg0 = rs.partials[num]
           combined_relation = [u + v for u, v in zip(relation0, relation)]
-          relations.append((lhs*lhs0, combined_relation, neg^neg0, num))
-          del partials[num]
+          rs.relations.append((lhs*lhs0, combined_relation, neg^neg0, num))
+          del rs.partials[num]
           partial_match += 1
         else:
-          partials[num] = (lhs, relation, neg)
+          rs.partials[num] = (lhs, relation, neg)
       else: log_sieve_false_positive += 1
-    searched += 1
-    progress.set_description(f"{searched:5d} blocks, {len(relations)/searched:6.2f} relations/block, {partial_match=}")
-    progress.update(min(NUM_RELATIONS, len(relations))-progress.n)
-    if len(relations) >= NUM_RELATIONS: break
+    rs.searched += 1
+    progress.set_description(f"{rs.searched:5d} blocks, {len(rs.relations)/rs.searched:6.2f} relations/block, {partial_match=}")
+    progress.update(min(NUM_RELATIONS, len(rs.relations))-progress.n)
+    if len(rs.relations) >= NUM_RELATIONS: break
   progress.close()
   et = time.perf_counter()-st
-  print(f"collected {len(relations)=} across {searched} blocks in {et:.2f} s, {et*1000./searched:.2f} ms/superblock")
-  print(f"got {log_sieve_false_positive=} with {sieve_time_s:.2f} s in the sieve, {len(partials)=} unmatched partial")
+  print(f"collected {len(rs.relations)=} across {rs.searched} blocks in {et:.2f} s, {et*1000./rs.searched:.2f} ms/superblock")
+  print(f"{len(rs.partials)=} unmatched partial")
+  print(f"got {log_sieve_false_positive=} {log_sieve_duplicate=} with {sieve_time_s:.2f} s in the sieve")
+
+def qsieve(N):
+  rs = RelationState()
+  for A in range(1, 100):
+    for fudge in range(-100, 100):
+      B = math.isqrt(N)+fudge
+      if (B*B - N) % A == 0: break
+    else:
+      print(f"A={A} is bad")
+      continue
+
+    # NOTE: we explore both negative and positive x
+    ##BOUND = math.isqrt(2*N)-math.isqrt(N)  # after the max here it gets dumb
+    BOUND = SUPERBLOCK_SIZE*8
+    superblock_schedule_order = itertools.chain.from_iterable(zip(
+      range(1, BOUND, SUPERBLOCK_SIZE),
+      range(-SUPERBLOCK_SIZE, -BOUND, -SUPERBLOCK_SIZE)))
+    qsieve_get_relations(N, A, B, superblock_schedule_order, rs)
+    if len(rs.relations) >= NUM_RELATIONS: break
 
   # then we need to solve to make a perfect square from the relations
   # we need to find a basis among the parity masks
-  print(f"matrix size is {len(relations)} x {len(FACTOR_BASE)+1}")
+  print(f"matrix size is {len(rs.relations)} x {len(FACTOR_BASE)+1}")
   st = time.perf_counter()
   congruence_false_positive = 0
   basis = {}
-  for i, (_, relation, neg, _) in enumerate(relations):
+  for i, (_, relation, neg, _) in enumerate(rs.relations):
     mask = sum(1 << i for i,n in enumerate(relation) if n&1)
     # NOTE: it works fine without this line? because process_congruence is retried?
     if neg: mask |= 1 << len(FACTOR_BASE)
@@ -267,7 +297,7 @@ def qsieve(N):
 
     # if we get a hit, reconstruct nums and factors from combo
     if mask == 0:
-      if process_congruence(N, relations, combo): break
+      if process_congruence(N, rs.relations, combo): break
       else: congruence_false_positive += 1
   else:
     raise RuntimeError("failed to find congruence")
