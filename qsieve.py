@@ -105,7 +105,7 @@ def Q(x, a, delta):
   # FOIL to x*x + 2*a*x + a*a - N
   return x*x + 2*a*x + delta
 
-def make_Q(A, B, N, use_float=False):
+def make_Q(N, A, B, use_float=False):
   C = (B*B - N) // A
   if use_float: A,B,C = float(A), float(B), float(C)
   def Q(x): return A*x*x + 2*B*x + C
@@ -142,27 +142,39 @@ def do_superblock_sieve_gpu(Q, gpu_roots, gpu_p, x_superblock):
     if hit[j]: ret.append(x_superblock+j)
   return ret
 
-def qsieve(N):
-  a = math.isqrt(N)
-  BOUND = math.isqrt(2*N)-a  # after the max here it gets dumb
-  Q = make_Q(1, math.isqrt(N), N)
-  Q_f = make_Q(1, math.isqrt(N), N, use_float=True)
-
-  st = time.perf_counter()
-  # compute the ROOTS for each prime in FACTOR_BASE
-  # Q(x) % p == 0 (solve for x)
+def roots_for_factor_base(Q, FACTOR_BASE):
+  ROOTS = {}
+  for p in FACTOR_BASE: ROOTS[p] = [x for x in range(p) if Q(x)%p == 0]
+  """
   assert FACTOR_BASE[0] == 2, "two needs to be the first thing in the factor base"
-  ROOTS = {2:[(1-a)%2]} # 0 == (x*x + 2*a*x + a*a - N) % 2 == x + a - 1 -> 1-a == x
+  ROOTS = {2:[(1-B)%2]} # 0 == (x*x + 2*a*x + a*a - N) % 2 == x + a - 1 -> 1-a == x
   for p in FACTOR_BASE[1:]:
     # odd primes have two roots
     # 0 == ((x+a)^2 - N) % p
     # N == (x+a)^2 % p
     s = sqrt_mod(N, p)  # s*s == N % p
     # so x+a == +/- s % p
-    r1 = ( s - a) % p
-    r2 = (-s - a) % p
+    r1 = ( s - B) % p
+    r2 = (-s - B) % p
     assert r1 != r2
     ROOTS[p] = [r1, r2]
+  """
+  return ROOTS
+
+def qsieve(N):
+  A, B = 1, math.isqrt(N)
+  assert (B*B - N) % A == 0
+  # A must fully factorize
+  _, rem = b_smooth_factorize(A)
+  assert rem == 1
+
+  Q = make_Q(N, A, B)
+  Q_f = make_Q(N, A, B, use_float=True)
+
+  st = time.perf_counter()
+  # compute the ROOTS for each prime in FACTOR_BASE
+  # Q(x) % p == 0 (solve for x)
+  ROOTS = roots_for_factor_base(Q, FACTOR_BASE)
   print(f"computed {len(ROOTS)=} in {time.perf_counter()-st:.2f} s")
 
   # precompute the logs of the primes and put roots in a list
@@ -190,6 +202,7 @@ def qsieve(N):
   log_sieve_false_positive = 0
   sieve_time_s = 0.0
   # NOTE: we explore both negative and positive x
+  BOUND = math.isqrt(2*N)-math.isqrt(N)  # after the max here it gets dumb
   superblock_schedule_order = itertools.chain.from_iterable(zip(
     range(1, BOUND, SUPERBLOCK_SIZE),
     range(-SUPERBLOCK_SIZE, -BOUND, -SUPERBLOCK_SIZE)))
@@ -201,17 +214,19 @@ def qsieve(N):
     sieve_time_s += time.perf_counter() - inner_st
     for x in sieved:
       relation, num = b_smooth_factorize(abs(Q(x)))
-      if num == 1: relations.append((a+x, relation, x<0, 1))
+      lhs = A*x+B
+      neg = x<0
+      if num == 1: relations.append((lhs, relation, neg, 1))
       elif num <= LP_BOUND and isprime(num):
         if num in partials:
           # got a match!
           lhs0, relation0, neg0 = partials[num]
           combined_relation = [u + v for u, v in zip(relation0, relation)]
-          relations.append(((a+x)*lhs0, combined_relation, neg0 ^ (x<0), num))
+          relations.append((lhs*lhs0, combined_relation, neg^neg0, num))
           del partials[num]
           partial_match += 1
         else:
-          partials[num] = (a+x, relation, x<0)
+          partials[num] = (lhs, relation, neg)
       else: log_sieve_false_positive += 1
     searched += 1
     progress.set_description(f"{searched:5d} blocks, {len(relations)/searched:6.2f} relations/block, {partial_match=}")
