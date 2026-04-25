@@ -50,7 +50,7 @@ while 1:
   if p==q: continue
   N = p*q
   break
-print(f"factoring {N} into {p} {q} with {N.bit_length()} bits")
+print(f"factoring {N} into {p} {q} with {N.bit_length()} bits {math.log(N)=:.2f}")
 del p,q # no cheating
 
 # generate primes up to B filtered by quadratic residue
@@ -59,7 +59,7 @@ FACTOR_BASE = [2] + [p for p in range(3, B+1, 2) if isprime(p) and pow(N, (p-1)/
 NUM_RELATIONS = len(FACTOR_BASE) + max(8, len(FACTOR_BASE) // 10)
 LS_SCALE = 1 << 32
 print(f"{B=} {max(FACTOR_BASE)=} {len(FACTOR_BASE)=}")
-print(f"{NUM_RELATIONS=} {LOG_SIEVE_THRESHOLD=:.2f} {BLOCK_SIZE=} {SUPERBLOCK_SIZE=} {math.log(LS_SCALE):f=}")
+print(f"{NUM_RELATIONS=} {LOG_SIEVE_THRESHOLD=:.2f} {BLOCK_SIZE=} {SUPERBLOCK_SIZE=} {math.log(LS_SCALE)=:.2f}")
 
 def format_factors(factors):
   return ' * '.join([f"{p}^{f}" if f > 1 else f"{p}" for p,f in zip(FACTOR_BASE, factors) if f > 0])
@@ -172,11 +172,12 @@ class RelationState:
   log_sieve_duplicate:int = 0
   progress: tqdm.tqdm = field(default_factory=lambda: tqdm.tqdm(total=NUM_RELATIONS))
 
-def qsieve_get_relations(N, A, B, superblock_schedule_order, rs:RelationState):
+def qsieve_get_relations(N, A, B, block_schedule_order, rs:RelationState):
   # A must fully factorize
   A_relation, rem = b_smooth_factorize(A)
   assert rem == 1
   Q = QFunction(N, A, B)
+  #print(f"{Q(-SUPERBLOCK_SIZE)=:.2e} {Q(0)=:.2e} {Q(SUPERBLOCK_SIZE)=:.2e}")
 
   st = time.perf_counter()
   # compute the ROOTS for each prime in FACTOR_BASE
@@ -205,11 +206,11 @@ def qsieve_get_relations(N, A, B, superblock_schedule_order, rs:RelationState):
   sieve_time_s = 0.0
 
   begin_relations = len(rs.relations)
-  for x_superblock in superblock_schedule_order:
+  for x_block in block_schedule_order:
     start_relations = len(rs.relations)
     # here we extract the real relations from the log_sieve
     inner_st = time.perf_counter()
-    sieved = my_superblock_sieve(x_superblock)
+    sieved = my_superblock_sieve(x_block)
     sieve_time_s += time.perf_counter() - inner_st
     for x in sieved:
       lhs = A*x + B
@@ -238,7 +239,7 @@ def qsieve_get_relations(N, A, B, superblock_schedule_order, rs:RelationState):
     rs.searched += 1
     rs.progress.set_description(f"{rs.searched:5d} b, {(len(rs.relations)-start_relations):3d} r/b, "
                              f"{(len(rs.relations)-begin_relations)-partial_match:3d}+{partial_match:3d} p, "
-                             f"{rs.log_sieve_false_positive*100./(len(rs.relations)+rs.log_sieve_false_positive):.1f}% fp, "
+                             f"{rs.log_sieve_false_positive*100./(1e-10+len(rs.relations)+rs.log_sieve_false_positive):.1f}% fp, "
                              f"{rs.log_sieve_duplicate} dup, A={Q.A}")
     rs.progress.update(min(NUM_RELATIONS, len(rs.relations))-rs.progress.n)
     if len(rs.relations) >= NUM_RELATIONS: break
@@ -251,24 +252,42 @@ def qsieve(N):
   import random
   rs = RelationState()
   while 1:
-    #p1 = random.choice(FACTOR_BASE)
-    #p2 = random.choice(FACTOR_BASE)
-    #p3 = random.choice(FACTOR_BASE)
-    #if p1 == p2 or p2 == p3 or p1 == p3: continue
-    #A = p1*p2*p3
+    """
     A = random.choice([1]+FACTOR_BASE)
     for fudge in range(-10000, 10000):
       B = math.isqrt(N)+fudge
       if (B*B - N) % A == 0: break
     else:
-      #print(f"A={A} is bad")
       continue
+    """
+
+    target_A = math.isqrt(2*N) // SUPERBLOCK_SIZE
+    target_B = 0
+    b = 0
+    A = 1
+    A_primes = []
+    for _ in range(100):
+      p = random.choice(FACTOR_BASE[1:])
+      if A > target_A: break
+      if p in A_primes: continue
+      if A * p > target_A * 4 // 3: continue
+      s = sqrt_mod(N, p)
+      r = random.choice([s % p, (-s) % p])
+      # CRT: b + mod*t == r mod p
+      t = ((r - b) * pow(A, -1, p)) % p
+      b += A * t
+      A *= p
+      A_primes.append(p)
+    else:
+      continue
+    k = (target_B - b) // A
+    B = min((b + (k+d)*A for d in range(-2, 3)), key=lambda x: abs(x - target_B))
 
     # NOTE: we explore both negative and positive x
-    superblock_schedule_order = itertools.chain.from_iterable(zip(
-      range(1, SUPERBLOCK_SIZE, BLOCK_SIZE),
-      range(-BLOCK_SIZE, -SUPERBLOCK_SIZE, -BLOCK_SIZE)))
-    qsieve_get_relations(N, A, B, superblock_schedule_order, rs)
+    num_blocks = SUPERBLOCK_SIZE // BLOCK_SIZE
+    block_schedule_order = itertools.chain.from_iterable(
+      (i*BLOCK_SIZE, -(i+1)*BLOCK_SIZE) for i in range(num_blocks))
+    qsieve_get_relations(N, A, B, block_schedule_order, rs)
     if len(rs.relations) >= NUM_RELATIONS: break
   rs.progress.close()
 
