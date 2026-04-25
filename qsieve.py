@@ -105,11 +105,17 @@ def Q(x, a, delta):
   # FOIL to x*x + 2*a*x + a*a - N
   return x*x + 2*a*x + delta
 
-def do_superblock_sieve(ROOTS_LIST, a_f, delta_f, x_superblock):
+def make_Q(A, B, N, use_float=False):
+  C = (B*B - N) // A
+  if use_float: A,B,C = float(A), float(B), float(C)
+  def Q(x): return A*x*x + 2*B*x + C
+  return Q
+
+def do_superblock_sieve(Q, ROOTS_LIST, x_superblock):
   ret = []
   for x_block in range(x_superblock, x_superblock+SUPERBLOCK_SIZE, BLOCK_SIZE):
     # we approximate log(Q(x)) in float
-    scores = [math.log(abs(Q(x, a_f, delta_f))) for x in range(x_block, x_block+BLOCK_SIZE)]
+    scores = [math.log(abs(Q(x))) for x in range(x_block, x_block+BLOCK_SIZE)]
 
     # sieve with the roots
     for root,p,log_p in ROOTS_LIST:
@@ -123,10 +129,10 @@ def do_superblock_sieve(ROOTS_LIST, a_f, delta_f, x_superblock):
       if scores[j] < LOG_SIEVE_THRESHOLD: ret.append(x_block+j)
   return ret
 
-from tinygrad import Tensor
-def do_superblock_sieve_gpu(gpu_roots, gpu_p, a_f, delta_f, x_superblock):
+from tinygrad import Tensor, getenv
+def do_superblock_sieve_gpu(Q, gpu_roots, gpu_p, x_superblock):
   rng = Tensor([x_superblock]) + Tensor.arange(0, SUPERBLOCK_SIZE)
-  sieve = Q(rng, a_f, delta_f).abs().log()
+  sieve = Q(rng).abs().log()
   sieve = sieve - ((((gpu_roots - rng.reshape(-1, 1)) % gpu_p) == 0).float() * gpu_p.log()).sum(1)
   hit = (sieve<LOG_SIEVE_THRESHOLD).tolist()
 
@@ -138,8 +144,9 @@ def do_superblock_sieve_gpu(gpu_roots, gpu_p, a_f, delta_f, x_superblock):
 
 def qsieve(N):
   a = math.isqrt(N)
-  delta = a*a - N
   BOUND = math.isqrt(2*N)-a  # after the max here it gets dumb
+  Q = make_Q(1, math.isqrt(N), N)
+  Q_f = make_Q(1, math.isqrt(N), N, use_float=True)
 
   st = time.perf_counter()
   # compute the ROOTS for each prime in FACTOR_BASE
@@ -165,12 +172,12 @@ def qsieve(N):
     for root in ROOTS[p]:
       ROOTS_LIST.append((root,p,log_p))
 
-
-  #my_superblock_sieve = functools.partial(do_superblock_sieve_gpu,
-  #                                        Tensor([x[0] for x in ROOTS_LIST]),
-  #                                        Tensor([x[1] for x in ROOTS_LIST]),
-  #                                        float(a), float(delta))
-  my_superblock_sieve = functools.partial(do_superblock_sieve, ROOTS_LIST, float(a), float(delta))
+  if getenv("GPU"):
+    my_superblock_sieve = functools.partial(do_superblock_sieve_gpu, Q_f,
+                                            Tensor([x[0] for x in ROOTS_LIST]),
+                                            Tensor([x[1] for x in ROOTS_LIST]))
+  else:
+    my_superblock_sieve = functools.partial(do_superblock_sieve, Q_f, ROOTS_LIST)
 
   # first we need to find B-smooth Q(x) values
   # we use a log sieve to prefilter everything
@@ -193,7 +200,7 @@ def qsieve(N):
     sieved = my_superblock_sieve(x_superblock)
     sieve_time_s += time.perf_counter() - inner_st
     for x in sieved:
-      relation, num = b_smooth_factorize(abs(Q(x, a, delta)))
+      relation, num = b_smooth_factorize(abs(Q(x)))
       if num == 1: relations.append((a+x, relation, x<0, 1))
       elif num <= LP_BOUND and isprime(num):
         if num in partials:
