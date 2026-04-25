@@ -162,10 +162,10 @@ def roots_for_factor_base(Q, FACTOR_BASE):
   return ROOTS
 
 def qsieve(N):
-  A, B = 1, math.isqrt(N)
+  A, B = 2, math.isqrt(N)
   assert (B*B - N) % A == 0
   # A must fully factorize
-  _, rem = b_smooth_factorize(A)
+  A_relation, rem = b_smooth_factorize(A)
   assert rem == 1
 
   Q = make_Q(N, A, B)
@@ -213,9 +213,12 @@ def qsieve(N):
     sieved = my_superblock_sieve(x_superblock)
     sieve_time_s += time.perf_counter() - inner_st
     for x in sieved:
-      relation, num = b_smooth_factorize(abs(Q(x)))
-      lhs = A*x+B
-      neg = x<0
+      q = Q(x)
+      relation, num = b_smooth_factorize(abs(q))
+      # the A relation needs to be included in all relations for that polynomial
+      relation = [u + v for u, v in zip(A_relation, relation)]
+      lhs = A*x + B
+      neg = q < 0
       if num == 1: relations.append((lhs, relation, neg, 1))
       elif num <= LP_BOUND and isprime(num):
         if num in partials:
