@@ -17,21 +17,25 @@ from sympy import isprime
 # FAST (can implement with Tonelli-Shanks but meh)
 from sympy import sqrt_mod
 
+# tinygrad for speed
+from tinygrad import Tensor, getenv
+
 # param for the generator
-BITS = 150
+BITS = 140
 
 # use this heuristic for B
 B = int(math.exp(0.5 * math.sqrt((BITS * math.log(2)) * math.log(BITS * math.log(2)))))
 
 # hack to deal with inefficencies in this implementation (makes it way faster)
 #B *= 2
+GPU = getenv("GPU", 1)
 
 # large prime bound
 LP_BOUND = 32*B
 
 # params for log sieve
 BLOCK_SIZE = 4096
-BLOCKS_PER_SUPERBLOCK = 256 # TODO: on just the GPU, this should be a lot bigger
+BLOCKS_PER_SUPERBLOCK = 1024 if GPU else 256 # TODO: on just the GPU, this should be a lot bigger
 SUPERBLOCK_SIZE = BLOCK_SIZE*BLOCKS_PER_SUPERBLOCK
 LOG_SIEVE_THRESHOLD = math.log(LP_BOUND)
 
@@ -133,7 +137,6 @@ def do_superblock_sieve(Q, ROOTS_LIST, x_superblock):
       if scores[j] < LOG_SIEVE_THRESHOLD: ret.append(x_block+j)
   return ret
 
-from tinygrad import Tensor, getenv
 def do_superblock_sieve_gpu(Q, gpu_roots, gpu_p, x_superblock):
   rng = Tensor([x_superblock]) + Tensor.arange(0, SUPERBLOCK_SIZE)
   sieve = Q(rng).abs().log()
@@ -172,9 +175,13 @@ class RelationState:
   relations: list = field(default_factory=list)
   partials: dict = field(default_factory=dict)
   seen: set = field(default_factory=set)
+  # tracking
+  searched: int = 0
+  log_sieve_false_positive:int = 0
+  log_sieve_duplicate:int = 0
+  progress: tqdm.tqdm = field(default_factory=lambda: tqdm.tqdm(total=NUM_RELATIONS))
 
 def qsieve_get_relations(N, A, B, superblock_schedule_order, rs:RelationState):
-  print(f"getting relations for {A=} {B=}")
   # A must fully factorize
   A_relation, rem = b_smooth_factorize(A)
   assert rem == 1
@@ -186,7 +193,7 @@ def qsieve_get_relations(N, A, B, superblock_schedule_order, rs:RelationState):
   # compute the ROOTS for each prime in FACTOR_BASE
   # Q(x) % p == 0 (solve for x)
   ROOTS = roots_for_factor_base(Q, FACTOR_BASE)
-  print(f"computed {len(ROOTS)=} in {time.perf_counter()-st:.2f} s")
+  #print(f"computed {len(ROOTS)=} in {time.perf_counter()-st:.2f} s")
 
   # precompute the logs of the primes and put roots in a list
   ROOTS_LIST = []
@@ -195,7 +202,7 @@ def qsieve_get_relations(N, A, B, superblock_schedule_order, rs:RelationState):
     for root in ROOTS[p]:
       ROOTS_LIST.append((root,p,log_p))
 
-  if getenv("GPU", 1):
+  if GPU:
     my_superblock_sieve = functools.partial(do_superblock_sieve_gpu, Q_f,
                                             Tensor([x[0] for x in ROOTS_LIST]),
                                             Tensor([x[1] for x in ROOTS_LIST]))
@@ -205,15 +212,12 @@ def qsieve_get_relations(N, A, B, superblock_schedule_order, rs:RelationState):
   # first we need to find B-smooth Q(x) values
   # we use a log sieve to prefilter everything
   st = time.perf_counter()
-  progress = tqdm.tqdm(total=NUM_RELATIONS)
   partial_match = 0
-  log_sieve_false_positive = 0
-  log_sieve_duplicate = 0
   sieve_time_s = 0.0
-  start_relations = len(rs.relations)
-  searched = 0
 
+  begin_relations = len(rs.relations)
   for x_superblock in superblock_schedule_order:
+    start_relations = len(rs.relations)
     # here we extract the real relations from the log_sieve
     inner_st = time.perf_counter()
     sieved = my_superblock_sieve(x_superblock)
@@ -226,7 +230,7 @@ def qsieve_get_relations(N, A, B, superblock_schedule_order, rs:RelationState):
       lhs = A*x + B
       key = lhs%N
       if key in rs.seen:
-        log_sieve_duplicate += 1
+        rs.log_sieve_duplicate += 1
         continue
       rs.seen.add(key)
       neg = q < 0
@@ -241,16 +245,17 @@ def qsieve_get_relations(N, A, B, superblock_schedule_order, rs:RelationState):
           partial_match += 1
         else:
           rs.partials[num] = (lhs, relation, neg)
-      else: log_sieve_false_positive += 1
-    searched += 1
-    progress.set_description(f"{searched:5d} blocks, {(len(rs.relations)-start_relations)/searched:6.2f} relations/block, {partial_match=}")
-    progress.update(min(NUM_RELATIONS, len(rs.relations))-progress.n)
+      else: rs.log_sieve_false_positive += 1
+    rs.searched += 1
+    rs.progress.set_description(f"{rs.searched:5d} b, {(len(rs.relations)-start_relations):3d} r/b, "
+                             f"{(len(rs.relations)-begin_relations)-partial_match:3d}+{partial_match:3d} p, "
+                             f"{rs.log_sieve_false_positive} fp, {rs.log_sieve_duplicate} dup, A={Q.A}")
+    rs.progress.update(min(NUM_RELATIONS, len(rs.relations))-rs.progress.n)
     if len(rs.relations) >= NUM_RELATIONS: break
-  progress.close()
   et = time.perf_counter()-st
-  print(f"collected {(len(rs.relations)-start_relations)} relations across {searched} blocks in {et:.2f} s, {et*1000./searched:.2f} ms/superblock")
-  print(f"{len(rs.partials)=} unmatched partial")
-  print(f"got {log_sieve_false_positive=} {log_sieve_duplicate=} with {sieve_time_s:.2f} s in the sieve")
+  #print(f"collected {(len(rs.relations)-start_relations)} relations across {searched} blocks in {et:.2f} s, {et*1000./searched:.2f} ms/superblock")
+  #print(f"{len(rs.partials)=} unmatched partial")
+  #print(f"got {log_sieve_false_positive=} {log_sieve_duplicate=} with {sieve_time_s:.2f} s in the sieve")
 
 def qsieve(N):
   import random
@@ -266,7 +271,7 @@ def qsieve(N):
       B = math.isqrt(N)+fudge
       if (B*B - N) % A == 0: break
     else:
-      print(f"A={A} is bad")
+      #print(f"A={A} is bad")
       continue
 
     # required
@@ -280,6 +285,7 @@ def qsieve(N):
       range(-SUPERBLOCK_SIZE, -BOUND, -SUPERBLOCK_SIZE)))
     qsieve_get_relations(N, A, B, superblock_schedule_order, rs)
     if len(rs.relations) >= NUM_RELATIONS: break
+  rs.progress.close()
 
   # then we need to solve to make a perfect square from the relations
   # we need to find a basis among the parity masks
