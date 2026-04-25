@@ -18,7 +18,7 @@ from sympy import isprime
 from sympy import sqrt_mod
 
 # param for the generator
-BITS = 100
+BITS = 150
 
 # use this heuristic for B
 B = int(math.exp(0.5 * math.sqrt((BITS * math.log(2)) * math.log(BITS * math.log(2)))))
@@ -172,7 +172,6 @@ class RelationState:
   relations: list = field(default_factory=list)
   partials: dict = field(default_factory=dict)
   seen: set = field(default_factory=set)
-  searched: int = 0
 
 def qsieve_get_relations(N, A, B, superblock_schedule_order, rs:RelationState):
   print(f"getting relations for {A=} {B=}")
@@ -196,7 +195,7 @@ def qsieve_get_relations(N, A, B, superblock_schedule_order, rs:RelationState):
     for root in ROOTS[p]:
       ROOTS_LIST.append((root,p,log_p))
 
-  if getenv("GPU"):
+  if getenv("GPU", 1):
     my_superblock_sieve = functools.partial(do_superblock_sieve_gpu, Q_f,
                                             Tensor([x[0] for x in ROOTS_LIST]),
                                             Tensor([x[1] for x in ROOTS_LIST]))
@@ -211,6 +210,8 @@ def qsieve_get_relations(N, A, B, superblock_schedule_order, rs:RelationState):
   log_sieve_false_positive = 0
   log_sieve_duplicate = 0
   sieve_time_s = 0.0
+  start_relations = len(rs.relations)
+  searched = 0
 
   for x_superblock in superblock_schedule_order:
     # here we extract the real relations from the log_sieve
@@ -241,25 +242,35 @@ def qsieve_get_relations(N, A, B, superblock_schedule_order, rs:RelationState):
         else:
           rs.partials[num] = (lhs, relation, neg)
       else: log_sieve_false_positive += 1
-    rs.searched += 1
-    progress.set_description(f"{rs.searched:5d} blocks, {len(rs.relations)/rs.searched:6.2f} relations/block, {partial_match=}")
+    searched += 1
+    progress.set_description(f"{searched:5d} blocks, {(len(rs.relations)-start_relations)/searched:6.2f} relations/block, {partial_match=}")
     progress.update(min(NUM_RELATIONS, len(rs.relations))-progress.n)
     if len(rs.relations) >= NUM_RELATIONS: break
   progress.close()
   et = time.perf_counter()-st
-  print(f"collected {len(rs.relations)=} across {rs.searched} blocks in {et:.2f} s, {et*1000./rs.searched:.2f} ms/superblock")
+  print(f"collected {(len(rs.relations)-start_relations)} relations across {searched} blocks in {et:.2f} s, {et*1000./searched:.2f} ms/superblock")
   print(f"{len(rs.partials)=} unmatched partial")
   print(f"got {log_sieve_false_positive=} {log_sieve_duplicate=} with {sieve_time_s:.2f} s in the sieve")
 
 def qsieve(N):
+  import random
   rs = RelationState()
-  for A in range(1, 100):
-    for fudge in range(-100, 100):
+  while 1:
+    #p1 = random.choice(FACTOR_BASE)
+    #p2 = random.choice(FACTOR_BASE)
+    #p3 = random.choice(FACTOR_BASE)
+    #if p1 == p2 or p2 == p3 or p1 == p3: continue
+    #A = p1*p2*p3
+    A = random.choice([1]+FACTOR_BASE_SMALL)
+    for fudge in range(-10000, 10000):
       B = math.isqrt(N)+fudge
       if (B*B - N) % A == 0: break
     else:
       print(f"A={A} is bad")
       continue
+
+    # required
+    assert (B*B - N) % A == 0
 
     # NOTE: we explore both negative and positive x
     ##BOUND = math.isqrt(2*N)-math.isqrt(N)  # after the max here it gets dumb
