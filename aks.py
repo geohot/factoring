@@ -1,5 +1,4 @@
 # if n is prime
-import random
 from qsieve import rand_bits, gen_prime, gen_semiprime
 
 # (x+a)^n == x^n+a mod n
