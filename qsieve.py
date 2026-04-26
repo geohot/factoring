@@ -42,19 +42,22 @@ LOG_SIEVE_THRESHOLD = math.log(LP_BOUND) + 0.5
 # scale factor for the log sieve
 LS_SCALE = 1 << 32
 
+def rand_bits(bits):
+  return random.randint((1 << (bits-1))+1, 1 << bits)
+
 def gen_prime(bits):
-  ret = random.randint((1 << (bits-1))+1, 1 << bits)
+  ret = rand_bits(bits)
   while not isprime(ret): ret += 1
   return ret
 
 # generate number for factoring (N)
-def gen_semiprime():
+def gen_semiprime(bits):
   while 1:
-    p,q = gen_prime(BITS//2), gen_prime(BITS//2)
+    p,q = gen_prime(bits//2), gen_prime(bits//2)
     if p==q: continue
     N = p*q
     break
-  print(f"factoring {N} into {p} {q} with {N.bit_length()} bits {math.log(N)=:.2f}")
+  print(f"semiprime {N} into {p} {q} with {N.bit_length()} bits {math.log(N)=:.2f}")
   del p,q # no cheating
   return N
 
@@ -246,7 +249,7 @@ def qsieve_get_relations(N, A, B, block_schedule_order, rs:RelationState, FACTOR
   #print(f"got {log_sieve_false_positive=} {log_sieve_duplicate=} with {sieve_time_s:.2f} s in the sieve")
 
 def qsieve():
-  N = gen_semiprime()
+  N = gen_semiprime(BITS)
 
   # generate primes up to B filtered by quadratic residue
   # https://en.wikipedia.org/wiki/Euler%27s_criterion
