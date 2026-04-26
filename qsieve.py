@@ -24,14 +24,14 @@ from tinygrad import Tensor, getenv
 BITS = getenv("BITS", 140)
 
 # use this heuristic for B
-B = int(math.exp(0.5 * math.sqrt((BITS * math.log(2)) * math.log(BITS * math.log(2)))))
+MAX_B = int(math.exp(0.5 * math.sqrt((BITS * math.log(2)) * math.log(BITS * math.log(2)))))
 
 # hack to deal with inefficencies in this implementation (makes it way faster)
 #B *= 2
 GPU = getenv("GPU", 1)
 
 # large prime bound
-LP_BOUND = 32*B
+LP_BOUND = 32*MAX_B
 
 # params for log sieve
 BLOCK_SIZE = 4096*256
@@ -39,32 +39,26 @@ BLOCKS_PER_SUPERBLOCK = 8 # TODO: on just the GPU, this should be a lot bigger
 SUPERBLOCK_SIZE = BLOCK_SIZE*BLOCKS_PER_SUPERBLOCK
 LOG_SIEVE_THRESHOLD = math.log(LP_BOUND) + 0.5
 
+# scale factor for the log sieve
+LS_SCALE = 1 << 32
+
 def gen_prime(bits):
   ret = random.randint((1 << (bits-1))+1, 1 << bits)
   while not isprime(ret): ret += 1
   return ret
 
 # generate number for factoring (N)
-while 1:
-  p,q = gen_prime(BITS//2), gen_prime(BITS//2)
-  if p==q: continue
-  N = p*q
-  break
-print(f"factoring {N} into {p} {q} with {N.bit_length()} bits {math.log(N)=:.2f}")
-del p,q # no cheating
+def gen_semiprime():
+  while 1:
+    p,q = gen_prime(BITS//2), gen_prime(BITS//2)
+    if p==q: continue
+    N = p*q
+    break
+  print(f"factoring {N} into {p} {q} with {N.bit_length()} bits {math.log(N)=:.2f}")
+  del p,q # no cheating
+  return N
 
-# generate primes up to B filtered by quadratic residue
-# https://en.wikipedia.org/wiki/Euler%27s_criterion
-FACTOR_BASE = [2] + [p for p in range(3, B+1, 2) if isprime(p) and pow(N, (p-1)//2, p) == 1]
-NUM_RELATIONS = len(FACTOR_BASE) + max(8, len(FACTOR_BASE) // 10)
-LS_SCALE = 1 << 32
-print(f"{B=} {max(FACTOR_BASE)=} {len(FACTOR_BASE)=}")
-print(f"{NUM_RELATIONS=} {LOG_SIEVE_THRESHOLD=:.2f} {BLOCK_SIZE=} {SUPERBLOCK_SIZE=} {math.log(LS_SCALE)=:.2f}")
-
-def format_factors(factors):
-  return ' * '.join([f"{p}^{f}" if f > 1 else f"{p}" for p,f in zip(FACTOR_BASE, factors) if f > 0])
-
-def process_congruence(N, relations, combo):
+def process_congruence(N, relations, combo, FACTOR_BASE):
   nums = []
   factors = [0]*len(FACTOR_BASE)
   all_extra = 1
@@ -91,7 +85,7 @@ def process_congruence(N, relations, combo):
     return True
   return False
 
-def b_smooth_factorize(num):
+def b_smooth_factorize(num, FACTOR_BASE):
   factors = [0]*len(FACTOR_BASE)
   for i,p in enumerate(FACTOR_BASE):
     while num%p == 0:
@@ -152,7 +146,7 @@ def roots_for_factor_base(Q:QFunction, FACTOR_BASE):
       # odd primes have two roots
       # 0 == ((x+a)^2 - N) % p
       # N == (x+a)^2 % p
-      s = sqrt_mod(N, p)  # s*s == N % p
+      s = sqrt_mod(Q.N, p)  # s*s == N % p
       inv_A = pow(Q.A, -1, p)
       # so x+a == +/- s % p
       r1 = (( s - Q.B) * inv_A) % p
@@ -163,18 +157,21 @@ def roots_for_factor_base(Q:QFunction, FACTOR_BASE):
 
 @dataclass
 class RelationState:
+  progress: tqdm.tqdm
+
+  # data
   relations: list = field(default_factory=list)
   partials: dict = field(default_factory=dict)
   seen: set = field(default_factory=set)
+
   # tracking
   searched: int = 0
   log_sieve_false_positive:int = 0
   log_sieve_duplicate:int = 0
-  progress: tqdm.tqdm = field(default_factory=lambda: tqdm.tqdm(total=NUM_RELATIONS))
 
-def qsieve_get_relations(N, A, B, block_schedule_order, rs:RelationState):
+def qsieve_get_relations(N, A, B, block_schedule_order, rs:RelationState, FACTOR_BASE, NUM_RELATIONS):
   # A must fully factorize
-  A_relation, rem = b_smooth_factorize(A)
+  A_relation, rem = b_smooth_factorize(A, FACTOR_BASE)
   assert rem == 1
   Q = QFunction(N, A, B)
   #print(f"{Q(-SUPERBLOCK_SIZE)=:.2e} {Q(0)=:.2e} {Q(SUPERBLOCK_SIZE)=:.2e}")
@@ -219,7 +216,7 @@ def qsieve_get_relations(N, A, B, block_schedule_order, rs:RelationState):
         rs.log_sieve_duplicate += 1
         continue
       q = Q(x)
-      relation, num = b_smooth_factorize(abs(q))
+      relation, num = b_smooth_factorize(abs(q), FACTOR_BASE)
       # the A relation needs to be included in all relations for that polynomial
       relation = [u + v for u, v in zip(A_relation, relation)]
       rs.seen.add(key)
@@ -248,9 +245,17 @@ def qsieve_get_relations(N, A, B, block_schedule_order, rs:RelationState):
   #print(f"{len(rs.partials)=} unmatched partial")
   #print(f"got {log_sieve_false_positive=} {log_sieve_duplicate=} with {sieve_time_s:.2f} s in the sieve")
 
-def qsieve(N):
-  import random
-  rs = RelationState()
+def qsieve():
+  N = gen_semiprime()
+
+  # generate primes up to B filtered by quadratic residue
+  # https://en.wikipedia.org/wiki/Euler%27s_criterion
+  FACTOR_BASE = [2] + [p for p in range(3, MAX_B+1, 2) if isprime(p) and pow(N, (p-1)//2, p) == 1]
+  NUM_RELATIONS = len(FACTOR_BASE) + max(8, len(FACTOR_BASE) // 10)
+  print(f"{MAX_B=} {max(FACTOR_BASE)=} {len(FACTOR_BASE)=}")
+  print(f"{NUM_RELATIONS=} {LOG_SIEVE_THRESHOLD=:.2f} {BLOCK_SIZE=} {SUPERBLOCK_SIZE=} {math.log(LS_SCALE)=:.2f}")
+
+  rs = RelationState(tqdm.tqdm(total=NUM_RELATIONS))
   while 1:
     """
     A = random.choice([1]+FACTOR_BASE)
@@ -287,7 +292,7 @@ def qsieve(N):
     num_blocks = SUPERBLOCK_SIZE // BLOCK_SIZE
     block_schedule_order = itertools.chain.from_iterable(
       (i*BLOCK_SIZE, -(i+1)*BLOCK_SIZE) for i in range(num_blocks))
-    qsieve_get_relations(N, A, B, block_schedule_order, rs)
+    qsieve_get_relations(N, A, B, block_schedule_order, rs, FACTOR_BASE, NUM_RELATIONS)
     if len(rs.relations) >= NUM_RELATIONS: break
   rs.progress.close()
 
@@ -318,7 +323,7 @@ def qsieve(N):
 
     # if we get a hit, reconstruct nums and factors from combo
     if mask == 0:
-      if process_congruence(N, rs.relations, combo): break
+      if process_congruence(N, rs.relations, combo, FACTOR_BASE): break
       else: congruence_false_positive += 1
   else:
     raise RuntimeError("failed to find congruence")
@@ -326,5 +331,4 @@ def qsieve(N):
   assert congruence_false_positive < 10
 
 if __name__ == "__main__":
-  qsieve(N)
-
+  qsieve()
